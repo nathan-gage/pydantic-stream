@@ -28,7 +28,12 @@ def _to_bytes(source: Any) -> bytes:
     if isinstance(source, bytearray):
         return bytes(source)
     if callable(source):
-        return _to_bytes(source())
+        resolved = source()
+        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray)):
+            raise StreamingProjectionError(
+                f"Callable source returned another callable: {type(resolved).__name__!r}"
+            )
+        return _to_bytes(resolved)
     if hasattr(source, "read"):
         data = source.read()
         if isinstance(data, str):

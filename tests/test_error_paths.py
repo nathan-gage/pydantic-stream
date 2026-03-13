@@ -534,6 +534,33 @@ class TestSourceNormalization:
     def test_to_bytes_accepts_stringio(self) -> None:
         assert _to_bytes(StringIO("hello")) == b"hello"
 
+    def test_to_bytes_accepts_callable_returning_bytes(self) -> None:
+        assert _to_bytes(lambda: b"hello") == b"hello"
+
+    def test_to_bytes_accepts_callable_returning_str(self) -> None:
+        assert _to_bytes(lambda: "hello") == b"hello"
+
+    def test_to_bytes_callable_returning_callable_raises(self) -> None:
+        """Callable that returns another callable should raise, not recurse infinitely."""
+
+        def self_returning() -> Any:
+            return self_returning
+
+        with pytest.raises(StreamingProjectionError, match="[Cc]allable"):
+            _to_bytes(self_returning)
+
+    def test_to_bytes_callable_returning_another_callable_raises(self) -> None:
+        """Two callables that bounce between each other should raise, not recurse infinitely."""
+
+        def ping() -> Any:
+            return pong
+
+        def pong() -> Any:
+            return ping
+
+        with pytest.raises(StreamingProjectionError, match="[Cc]allable"):
+            _to_bytes(ping)
+
     def test_to_bytes_rejects_int(self) -> None:
         with pytest.raises(StreamingProjectionError):
             _to_bytes(42)
