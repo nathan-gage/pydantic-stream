@@ -1,0 +1,14 @@
+[package]
+name = "pydantic-stream-core"
+version = "0.1.0"
+edition = "2021"
+description = "JSON streaming and projection engine built on jiter"
+
+[dependencies]
+jiter = "0.8"
+
+[dev-dependencies]
+serde_json = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true
