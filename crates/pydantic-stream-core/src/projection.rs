@@ -15,7 +15,7 @@ pub fn project_object(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, Stream
         )));
     }
 
-    let output = project_object_from_current(&mut jiter, input, spec)?;
+    let output = project_object_from_current::<false>(&mut jiter, input, spec)?;
     jiter.finish()?;
     Ok(output)
 }
@@ -45,7 +45,7 @@ pub fn project_array(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamE
                 "Expected array items to be JSON objects, got {peek:?}"
             )));
         }
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
 
         while let Some(peek) = jiter.array_step()? {
             if peek != Peek::Object {
@@ -54,7 +54,7 @@ pub fn project_array(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamE
                 )));
             }
             output.push(b',');
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
         }
     }
 
@@ -84,7 +84,7 @@ pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8
             )));
         }
         let mut output = Vec::with_capacity(256);
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
         results.push(output);
 
         while let Some(peek) = jiter.array_step()? {
@@ -94,7 +94,7 @@ pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8
                 )));
             }
             let mut output = Vec::with_capacity(256);
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
             results.push(output);
         }
     }
@@ -180,7 +180,7 @@ pub fn project_array_items_sliced(
                     )));
                 }
                 let mut output = Vec::with_capacity(256);
-                project_object_inner(&mut jiter, input, spec, &mut output)?;
+                project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
                 results.push(output);
             } else {
                 jiter.known_skip(peek)?;
@@ -232,7 +232,7 @@ pub fn project_array_nav(
                 "Expected array items to be JSON objects, got {peek:?}"
             )));
         }
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
 
         while let Some(peek) = jiter.array_step()? {
             if peek != Peek::Object {
@@ -241,7 +241,7 @@ pub fn project_array_nav(
                 )));
             }
             output.push(b',');
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true>(&mut jiter, input, spec, &mut output)?;
         }
     }
 
@@ -327,7 +327,7 @@ pub fn project_array_items_partial(
             b'{' => {
                 let slice = &input[pos..];
                 let mut jiter = Jiter::new(slice);
-                match project_object_from_current(&mut jiter, slice, spec) {
+                match project_object_from_current::<true>(&mut jiter, slice, spec) {
                     Ok(projected) => {
                         let obj_end = pos + jiter.current_index();
                         items.push(projected);
@@ -358,19 +358,24 @@ pub fn project_array_items_partial(
 // ---------------------------------------------------------------------------
 
 /// Project the object at the current parser position into a new buffer.
-fn project_object_from_current(
+fn project_object_from_current<const EARLY_EXIT: bool>(
     jiter: &mut Jiter<'_>,
     input: &[u8],
     spec: &ObjectSpec,
 ) -> Result<Vec<u8>, JiterError> {
     let mut output = Vec::with_capacity(256);
-    project_object_inner(jiter, input, spec, &mut output)?;
+    project_object_inner::<EARLY_EXIT>(jiter, input, spec, &mut output)?;
     Ok(output)
 }
 
 /// Project a single object from the current jiter position.
 /// Assumes jiter has already peeked `Peek::Object`.
-fn project_object_inner(
+///
+/// `EARLY_EXIT` controls whether to stop hash-looking up keys once all known
+/// fields have been seen at least once.  Set to `true` for array projections
+/// (where duplicate JSON keys are not expected) and `false` for single-object
+/// projection (which must honour "last-wins" semantics for duplicate keys).
+fn project_object_inner<const EARLY_EXIT: bool>(
     jiter: &mut Jiter<'_>,
     input: &[u8],
     spec: &ObjectSpec,
@@ -385,14 +390,41 @@ fn project_object_inner(
         // `spec.fields.get(key)` is the last use of `key`; NLL releases the
         // jiter borrow before `process_field` mutably borrows it again.
         let field = spec.fields.get(key);
-        process_field(jiter, input, output, field, &mut first_field)?;
 
-        loop {
-            match jiter.next_key()? {
-                None => break,
-                Some(key) => {
-                    let field = spec.fields.get(key);
-                    process_field(jiter, input, output, field, &mut first_field)?;
+        if EARLY_EXIT {
+            let mut remaining = spec.fields.len();
+            if field.is_some() && remaining > 0 {
+                remaining -= 1;
+            }
+            process_field::<EARLY_EXIT>(jiter, input, output, field, &mut first_field)?;
+
+            loop {
+                match jiter.next_key()? {
+                    None => break,
+                    Some(key) => {
+                        if remaining > 0 {
+                            let field = spec.fields.get(key);
+                            if field.is_some() {
+                                remaining -= 1;
+                            }
+                            process_field::<EARLY_EXIT>(jiter, input, output, field, &mut first_field)?;
+                        } else {
+                            // All known fields found — skip without hash lookup.
+                            // NLL: key not used here, jiter borrow released.
+                            jiter.next_skip()?;
+                        }
+                    }
+                }
+            }
+        } else {
+            process_field::<EARLY_EXIT>(jiter, input, output, field, &mut first_field)?;
+            loop {
+                match jiter.next_key()? {
+                    None => break,
+                    Some(key) => {
+                        let field = spec.fields.get(key);
+                        process_field::<EARLY_EXIT>(jiter, input, output, field, &mut first_field)?;
+                    }
                 }
             }
         }
@@ -408,7 +440,7 @@ fn project_object_inner(
 /// can drop the `key: &str` borrow on jiter before this function borrows
 /// jiter mutably again.
 #[inline]
-fn process_field(
+fn process_field<const EARLY_EXIT: bool>(
     jiter: &mut Jiter<'_>,
     input: &[u8],
     output: &mut Vec<u8>,
@@ -427,7 +459,7 @@ fn process_field(
                         output.push(b',');
                     }
                     output.extend_from_slice(&field_spec.encoded_key);
-                    project_object_inner(jiter, input, nested_spec, output)?;
+                    project_object_inner::<EARLY_EXIT>(jiter, input, nested_spec, output)?;
                     *first_field = false;
                 } else {
                     copy_raw_value(jiter, input, output, field_spec, first_field)?;
