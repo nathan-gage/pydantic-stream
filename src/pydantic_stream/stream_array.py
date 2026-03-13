@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Generic, Iterator, TypeVar, overload
+from collections.abc import Iterator
+from typing import Generic, TypeVar, overload
 
 from pydantic import TypeAdapter
 
@@ -63,7 +64,9 @@ class StreamArray(Generic[T]):
 
         if index < 0:
             raise IndexError("StreamArray does not support negative indexing")
-        items = project_array_items_sliced(self._data, self._spec, self._prefix, index, index + 1, 1)
+        items = project_array_items_sliced(
+            self._data, self._spec, self._prefix, index, index + 1, 1
+        )
         if not items:
             raise IndexError(f"StreamArray index {index} out of range")
         return self._adapter.validate_json(items[0])

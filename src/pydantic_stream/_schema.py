@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Tuple
+from collections.abc import Mapping
+from typing import Any
 
 from ._native import FieldSpec, ObjectSpec, StreamingProjectionError
 
@@ -31,7 +32,7 @@ def input_keys_for_field(
     *,
     validate_by_alias: bool = True,
     validate_by_name: bool = False,
-) -> Tuple[str, ...]:
+) -> tuple[str, ...]:
     """Return flat input keys accepted for a field."""
     name = field_schema["name"]
     alias = field_schema.get("validation_alias")
@@ -39,7 +40,7 @@ def input_keys_for_field(
     if alias is None:
         return (name,)
 
-    alias_keys: Tuple[str, ...] = ()
+    alias_keys: tuple[str, ...] = ()
     if validate_by_alias:
         if isinstance(alias, str):
             alias_keys = (alias,)
@@ -70,7 +71,7 @@ def maybe_nested_object_spec(schema: Mapping[str, Any]) -> ObjectSpec | None:
     return None
 
 
-def _config_flags(schema: Mapping[str, Any]) -> Tuple[bool, bool]:
+def _config_flags(schema: Mapping[str, Any]) -> tuple[bool, bool]:
     """Extract (validate_by_alias, validate_by_name) from a schema node."""
     config: Any = schema.get("config") or {}
     return bool(config.get("validate_by_alias", True)), bool(config.get("validate_by_name", False))
@@ -81,7 +82,7 @@ def _compile_field_spec(
     *,
     validate_by_alias: bool = True,
     validate_by_name: bool = False,
-) -> Tuple[Tuple[str, ...], FieldSpec]:
+) -> tuple[tuple[str, ...], FieldSpec]:
     """Compile a field schema, returning (input_keys, FieldSpec)."""
     keys = input_keys_for_field(
         field_schema,
@@ -97,7 +98,8 @@ def _compile_field_spec(
 def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
     dataclass_schema = unwrap_schema(dataclass_schema)
     if dataclass_schema.get("type") != "dataclass":
-        raise StreamingProjectionError(f"Expected dataclass schema, got {dataclass_schema.get('type')!r}")
+        schema_type = dataclass_schema.get("type")
+        raise StreamingProjectionError(f"Expected dataclass schema, got {schema_type!r}")
 
     validate_by_alias, validate_by_name = _config_flags(dataclass_schema)
 
@@ -105,7 +107,7 @@ def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
     if args_schema.get("type") != "dataclass-args":
         raise StreamingProjectionError("Unsupported dataclass schema shape")
 
-    fields_by_input_key: Dict[str, FieldSpec] = {}
+    fields_by_input_key: dict[str, FieldSpec] = {}
     for field_schema in args_schema.get("fields", []):
         keys, spec = _compile_field_spec(
             field_schema,
@@ -129,7 +131,7 @@ def compile_model_spec(model_schema: Mapping[str, Any]) -> ObjectSpec:
     if fields_schema.get("type") != "model-fields":
         raise StreamingProjectionError("Unsupported model schema shape")
 
-    fields_by_input_key: Dict[str, FieldSpec] = {}
+    fields_by_input_key: dict[str, FieldSpec] = {}
     for field_name, field_schema in fields_schema.get("fields", {}).items():
         keys, spec = _compile_field_spec(
             {**field_schema, "name": field_name},
