@@ -422,15 +422,14 @@ fn process_key(
                     if !*first_field {
                         output.push(b',');
                     }
-                    write_json_string(output, &field_spec.output_key);
-                    output.push(b':');
+                    output.extend_from_slice(&field_spec.encoded_key);
                     project_object_inner(jiter, input, nested_spec, output)?;
                     *first_field = false;
                 } else {
-                    copy_raw_value(jiter, input, output, &field_spec.output_key, first_field)?;
+                    copy_raw_value(jiter, input, output, field_spec, first_field)?;
                 }
             } else {
-                copy_raw_value(jiter, input, output, &field_spec.output_key, first_field)?;
+                copy_raw_value(jiter, input, output, field_spec, first_field)?;
             }
         }
     }
@@ -443,7 +442,7 @@ fn copy_raw_value(
     jiter: &mut Jiter<'_>,
     input: &[u8],
     output: &mut Vec<u8>,
-    output_key: &str,
+    field_spec: &crate::spec::FieldSpec,
     first_field: &mut bool,
 ) -> Result<(), JiterError> {
     let start = jiter.current_index();
@@ -453,52 +452,12 @@ fn copy_raw_value(
     if !*first_field {
         output.push(b',');
     }
-    write_json_string(output, output_key);
-    output.push(b':');
+    output.extend_from_slice(&field_spec.encoded_key);
     output.extend_from_slice(&input[start..end]);
 
     *first_field = false;
     Ok(())
 }
-
-/// Write a JSON-encoded string (with quotes) to the output buffer.
-#[inline]
-fn write_json_string(output: &mut Vec<u8>, s: &str) {
-    output.push(b'"');
-    for byte in s.bytes() {
-        match byte {
-            b'"' => {
-                output.push(b'\\');
-                output.push(b'"');
-            }
-            b'\\' => {
-                output.push(b'\\');
-                output.push(b'\\');
-            }
-            b'\n' => {
-                output.push(b'\\');
-                output.push(b'n');
-            }
-            b'\r' => {
-                output.push(b'\\');
-                output.push(b'r');
-            }
-            b'\t' => {
-                output.push(b'\\');
-                output.push(b't');
-            }
-            b if b < 0x20 => {
-                output.extend_from_slice(b"\\u00");
-                output.push(HEX[(b >> 4) as usize]);
-                output.push(HEX[(b & 0xf) as usize]);
-            }
-            _ => output.push(byte),
-        }
-    }
-    output.push(b'"');
-}
-
-const HEX: [u8; 16] = *b"0123456789abcdef";
 
 /// Skip ASCII whitespace bytes starting at `*pos`.
 #[inline]
@@ -515,7 +474,6 @@ fn skip_ws(input: &[u8], pos: &mut usize) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use crate::spec::{FieldSpec, ObjectSpec};
@@ -524,25 +482,19 @@ mod tests {
 
     // Helper constructors
     fn field(output_key: &str) -> FieldSpec {
-        FieldSpec {
-            output_key: output_key.into(),
-            nested: None,
-        }
+        FieldSpec::new(output_key, None)
     }
 
     fn field_nested(output_key: &str, nested: ObjectSpec) -> FieldSpec {
-        FieldSpec {
-            output_key: output_key.into(),
-            nested: Some(Arc::new(nested)),
-        }
+        FieldSpec::new(output_key, Some(Arc::new(nested)))
     }
 
     fn mk_spec(pairs: &[(&str, FieldSpec)]) -> ObjectSpec {
-        let fields: HashMap<Box<str>, FieldSpec> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).into(), v.clone()))
-            .collect();
-        ObjectSpec { fields }
+        ObjectSpec::from_fields(
+            pairs
+                .iter()
+                .map(|(k, v)| (Box::from(*k), v.clone())),
+        )
     }
 
     fn parse(bytes: &[u8]) -> serde_json::Value {

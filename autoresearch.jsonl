@@ -1,1 +1,2 @@
 {"type":"config","name":"pydantic-stream Rust projection speed optimization","metricName":"total_ms","metricUnit":"ms","bestDirection":"lower"}
+{"run":1,"commit":"b80a0fe","metric":33.39,"metrics":{"wide_basemodel_ms":4.74,"default_basemodel_ms":3.95,"string_heavy_basemodel_ms":5.97,"deep_basemodel_ms":1.46,"many_small_basemodel_ms":0.88},"status":"keep","description":"Baseline: 33.39ms total. stream_basemodel wide=4.74, default=3.95, string-heavy=5.97, deep=1.46, many-small=0.88","timestamp":1773433858721,"segment":0}

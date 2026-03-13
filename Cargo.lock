@@ -192,6 +192,7 @@ dependencies = [
 name = "pydantic-stream-core"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "jiter",
  "serde_json",
 ]
