@@ -106,3 +106,35 @@ obj = MyDC.stream_validate_json(huge_bytes)
 ```
 
 The mixin is a drop-in addition — your existing pydantic models/dataclasses keep working normally, and you call `stream_*` methods when you want the projection optimization.
+
+## Development
+
+The repository now has a small developer CLI for test and benchmark workflows:
+
+```bash
+uv sync
+uv run python tools/dev.py build
+uv run python tools/dev.py --help
+```
+
+Useful examples:
+
+```bash
+uv run python tools/dev.py build
+uv run python tools/dev.py test --python-only --target tests/ -k chunked -q
+uv run python tools/dev.py bench --shape default --json benchmarks/results/before.json
+uv run python tools/dev.py bench --shape default --json benchmarks/results/after.json --compare-json benchmarks/results/before.json
+uv run python tools/dev.py bench --large --shape wide --no-memory
+```
+
+The `Makefile` is now just a thin wrapper around that CLI:
+
+```bash
+make dev
+make help
+make test-help
+make bench-help
+```
+
+For raw pytest usage and the benchmark artifact save/compare flow, see
+`benchmarks/README.md`.

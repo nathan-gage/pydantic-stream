@@ -12,6 +12,12 @@ CLI flags
     Restrict benchmarks to specific shapes.  Repeatable.
     Values: ``default``, ``wide``, ``deep``, ``string-heavy``, ``many-small``, ``all``.
     Default when omitted: ``all``.
+
+``--benchmark-compare-json``
+    Compare the current run against a prior ``--benchmark-json`` artifact.
+
+Run ``uv run pytest benchmarks/ --help`` to see the combined benchmark options
+from both this file and ``pytest-benchmark`` itself.
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import statistics
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import memray
@@ -29,6 +36,13 @@ import pytest
 from memray import FileReader
 
 from ._data_gen import SHAPES, PayloadShape
+from ._results import (
+    build_memory_comparisons,
+    build_timing_comparisons,
+    describe_saved_artifact,
+    load_saved_benchmark_artifact,
+    serialize_memory_results,
+)
 
 # ---------------------------------------------------------------------------
 # pytest hooks — CLI flags for benchmark shapes
@@ -60,6 +74,38 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Default: all."
         ),
     )
+    group.addoption(
+        "--benchmark-compare-json",
+        action="store",
+        default=None,
+        metavar="PATH",
+        help="Compare the current run against a previous --benchmark-json artifact at PATH.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    compare_path = config.getoption("--benchmark-compare-json")
+    if not compare_path:
+        config._benchmark_compare_artifact = None
+        return
+
+    compare_resolved = Path(compare_path).expanduser().resolve()
+    if not compare_resolved.is_file():
+        raise pytest.UsageError(
+            f"--benchmark-compare-json path does not exist or is not a file: {compare_path}"
+        )
+
+    benchmark_json = config.getoption("benchmark_json")
+    benchmark_json_name = getattr(benchmark_json, "name", None)
+    if benchmark_json_name and compare_resolved == Path(benchmark_json_name).expanduser().resolve():
+        raise pytest.UsageError(
+            "--benchmark-compare-json must not point at the same path as --benchmark-json"
+        )
+
+    try:
+        config._benchmark_compare_artifact = load_saved_benchmark_artifact(compare_resolved)
+    except ValueError as exc:
+        raise pytest.UsageError(str(exc)) from exc
 
 
 def _resolve_shapes(raw: list[str]) -> list[PayloadShape]:
@@ -170,6 +216,15 @@ class MemoryStats:
 
 memory_results: dict[str, MemoryStats] = {}
 metadata: dict[str, Any] = {}
+
+
+def _benchmark_context(config: pytest.Config) -> dict[str, Any]:
+    raw_shapes = config.getoption("--payload-shape")
+    return {
+        "large_payload": bool(config.getoption("--large-payload")),
+        "no_memory": bool(config.getoption("--no-memory")),
+        "payload_shapes": _resolve_shapes(raw_shapes),
+    }
 
 
 def _tracker(path: str) -> memray.Tracker:
@@ -357,24 +412,219 @@ def _render_memory_table(
     tr.write_line("-" * len(header), yellow=True)
 
 
+def _time_unit(best_val: float) -> tuple[str, float]:
+    if best_val < 1e-6:
+        return "ns", 1e9
+    if best_val < 1e-3:
+        return "us", 1e6
+    if best_val < 1:
+        return "ms", 1e3
+    return "s", 1.0
+
+
+def _render_timing_compare_table(tr: Any, group_name: str, rows: list[dict[str, Any]]) -> None:
+    best_val = min(min(row["previous"], row["current"]) for row in rows)
+    unit, scale = _time_unit(best_val)
+
+    labels = {
+        "name": f"Name (median in {unit})",
+        "previous": "Previous",
+        "current": "Current",
+        "ratio": "Ratio",
+        "delta": "Delta",
+    }
+
+    rendered_rows = [
+        {
+            "name": row["name"],
+            "previous": NUMBER_FMT.format(row["previous"] * scale),
+            "current": NUMBER_FMT.format(row["current"] * scale),
+            "ratio": "n/a" if row["ratio"] is None else f"{row['ratio']:.2f}x",
+            "delta": "n/a" if row["delta_pct"] is None else f"{row['delta_pct']:+.1f}%",
+            "is_improvement": row["current"] < row["previous"],
+            "is_regression": row["current"] > row["previous"],
+        }
+        for row in rows
+    ]
+
+    widths = {
+        "name": 3 + max(len(labels["name"]), max(len(row["name"]) for row in rendered_rows)),
+        "previous": 2
+        + max(len(labels["previous"]), max(len(row["previous"]) for row in rendered_rows)),
+        "current": 2
+        + max(len(labels["current"]), max(len(row["current"]) for row in rendered_rows)),
+        "ratio": 2 + max(len(labels["ratio"]), max(len(row["ratio"]) for row in rendered_rows)),
+        "delta": 2 + max(len(labels["delta"]), max(len(row["delta"]) for row in rendered_rows)),
+    }
+
+    header = (
+        labels["name"].ljust(widths["name"])
+        + labels["previous"].rjust(widths["previous"])
+        + labels["current"].rjust(widths["current"])
+        + labels["ratio"].rjust(widths["ratio"])
+        + labels["delta"].rjust(widths["delta"])
+    )
+    title = f" compare timing: {group_name} ({len(rows)} matched) "
+    tr.write_line(title.center(len(header), "-"), cyan=True)
+    tr.write_line(header)
+    tr.write_line("-" * len(header), cyan=True)
+
+    tw = tr._tw
+    for row in rendered_rows:
+        tw.write(row["name"].ljust(widths["name"]))
+        tw.write(f"{row['previous']:>{widths['previous']}}")
+        tw.write(f"{row['current']:>{widths['current']}}")
+        tw.write(
+            f"{row['ratio']:>{widths['ratio']}}",
+            green=row["is_improvement"],
+            red=row["is_regression"],
+            bold=True,
+        )
+        tw.write(
+            f"{row['delta']:>{widths['delta']}}",
+            green=row["is_improvement"],
+            red=row["is_regression"],
+        )
+        tw.line()
+    tr.write_line("-" * len(header), cyan=True)
+
+
+def _render_memory_compare_table(tr: Any, group_name: str, rows: list[dict[str, Any]]) -> None:
+    unit, divisor = _memory_unit(min(min(row["previous"], row["current"]) for row in rows))
+
+    labels = {
+        "name": f"Name (median peak in {unit})",
+        "previous": "Previous",
+        "current": "Current",
+        "ratio": "Ratio",
+        "delta": "Delta",
+    }
+
+    rendered_rows = [
+        {
+            "name": row["name"],
+            "previous": NUMBER_FMT.format(row["previous"] / divisor),
+            "current": NUMBER_FMT.format(row["current"] / divisor),
+            "ratio": "n/a" if row["ratio"] is None else f"{row['ratio']:.2f}x",
+            "delta": "n/a" if row["delta_pct"] is None else f"{row['delta_pct']:+.1f}%",
+            "is_improvement": row["current"] < row["previous"],
+            "is_regression": row["current"] > row["previous"],
+        }
+        for row in rows
+    ]
+
+    widths = {
+        "name": 3 + max(len(labels["name"]), max(len(row["name"]) for row in rendered_rows)),
+        "previous": 2
+        + max(len(labels["previous"]), max(len(row["previous"]) for row in rendered_rows)),
+        "current": 2
+        + max(len(labels["current"]), max(len(row["current"]) for row in rendered_rows)),
+        "ratio": 2 + max(len(labels["ratio"]), max(len(row["ratio"]) for row in rendered_rows)),
+        "delta": 2 + max(len(labels["delta"]), max(len(row["delta"]) for row in rendered_rows)),
+    }
+
+    header = (
+        labels["name"].ljust(widths["name"])
+        + labels["previous"].rjust(widths["previous"])
+        + labels["current"].rjust(widths["current"])
+        + labels["ratio"].rjust(widths["ratio"])
+        + labels["delta"].rjust(widths["delta"])
+    )
+    title = f" compare memory: {group_name} ({len(rows)} matched) "
+    tr.write_line(title.center(len(header), "-"), cyan=True)
+    tr.write_line(header)
+    tr.write_line("-" * len(header), cyan=True)
+
+    tw = tr._tw
+    for row in rendered_rows:
+        tw.write(row["name"].ljust(widths["name"]))
+        tw.write(f"{row['previous']:>{widths['previous']}}")
+        tw.write(f"{row['current']:>{widths['current']}}")
+        tw.write(
+            f"{row['ratio']:>{widths['ratio']}}",
+            green=row["is_improvement"],
+            red=row["is_regression"],
+            bold=True,
+        )
+        tw.write(
+            f"{row['delta']:>{widths['delta']}}",
+            green=row["is_improvement"],
+            red=row["is_regression"],
+        )
+        tw.line()
+    tr.write_line("-" * len(header), cyan=True)
+
+
+def pytest_benchmark_update_json(config: pytest.Config, benchmarks, output_json):  # noqa: ARG001
+    output_json["pydantic_stream"] = serialize_memory_results(
+        memory_results=memory_results,
+        metadata=metadata,
+        context=_benchmark_context(config),
+    )
+
+
+@pytest.hookimpl(trylast=True)
 def pytest_terminal_summary(terminalreporter, exitstatus, config):  # noqa: ARG001
     if not memory_results:
+        compare_artifact = getattr(config, "_benchmark_compare_artifact", None)
+        if compare_artifact is None:
+            return
+    else:
+        # Group results by their group name
+        groups: dict[str, list[MemoryStats]] = {}
+        for stats in memory_results.values():
+            groups.setdefault(stats.group, []).append(stats)
+
+        for group_name, group_results in groups.items():
+            group_results.sort(key=lambda r: r.median_val)
+            # Extract shape from group name (e.g. "parse-wide", "large-parse-deep")
+            payload_size = 0
+            for prefix in ("large-parse-", "parse-"):
+                if group_name.startswith(prefix):
+                    shape = group_name.removeprefix(prefix)
+                    payload_size = metadata.get(f"payload_size_{shape}", 0)
+                    break
+            _render_memory_table(terminalreporter, group_name, group_results, payload_size)
+
+        terminalreporter.write_line("")
+
+    compare_artifact = getattr(config, "_benchmark_compare_artifact", None)
+    if compare_artifact is None:
         return
 
-    # Group results by their group name
-    groups: dict[str, list[MemoryStats]] = {}
-    for stats in memory_results.values():
-        groups.setdefault(stats.group, []).append(stats)
+    compare_info = describe_saved_artifact(compare_artifact)
+    terminalreporter.write_line(
+        f"benchmark comparison source: commit {compare_info['commit']} at {compare_info['datetime']}",
+        cyan=True,
+    )
 
-    for group_name, group_results in groups.items():
-        group_results.sort(key=lambda r: r.median_val)
-        # Extract shape from group name (e.g. "parse-wide", "large-parse-deep")
-        payload_size = 0
-        for prefix in ("large-parse-", "parse-"):
-            if group_name.startswith(prefix):
-                shape = group_name.removeprefix(prefix)
-                payload_size = metadata.get(f"payload_size_{shape}", 0)
-                break
-        _render_memory_table(terminalreporter, group_name, group_results, payload_size)
+    benchmarksession = getattr(config, "_benchmarksession", None)
+    if benchmarksession is None:
+        return
 
-    terminalreporter.write_line("")
+    current_benchmarks = [
+        bench.as_dict(include_data=False)
+        for bench in benchmarksession.benchmarks
+        if bench and not bench.has_error and bench.stats is not None
+    ]
+    timing_compare = build_timing_comparisons(current_benchmarks, compare_artifact)
+    for group_name, rows in timing_compare["groups"].items():
+        _render_timing_compare_table(terminalreporter, group_name, rows)
+
+    if timing_compare["missing_from_saved"] or timing_compare["missing_from_current"]:
+        terminalreporter.write_line(
+            "benchmark comparison coverage:"
+            f" missing from saved={len(timing_compare['missing_from_saved'])},"
+            f" missing from current={len(timing_compare['missing_from_current'])}",
+            cyan=True,
+        )
+
+    memory_compare = build_memory_comparisons(memory_results, compare_artifact)
+    if memory_compare["groups"]:
+        for group_name, rows in memory_compare["groups"].items():
+            _render_memory_compare_table(terminalreporter, group_name, rows)
+    elif memory_results and not compare_info["has_memory"]:
+        terminalreporter.write_line(
+            "saved benchmark artifact has no pydantic-stream memory data; skipping memory comparison",
+            yellow=True,
+        )
