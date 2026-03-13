@@ -12,11 +12,7 @@ jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
       - run: cargo fmt --check
       - run: cargo clippy --workspace -- -D warnings
       - run: cargo test --workspace
@@ -24,10 +20,8 @@ jobs:
   python:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@e06108dd0aef18192324c70427afc47652e63a82
       - run: uv sync
       - run: uv run ruff check src/
       - run: maturin develop --release
