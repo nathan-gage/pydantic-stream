@@ -11,7 +11,8 @@ No ObjectSpec or projection is involved — items are yielded as raw bytes.
 
 from __future__ import annotations
 
-from typing import Any, Iterator, TypeVar
+from collections.abc import Iterator
+from typing import Any, TypeVar
 
 from pydantic import TypeAdapter
 

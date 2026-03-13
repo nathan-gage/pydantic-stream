@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, Iterator, Self, Type, TypeVar, cast
+from collections.abc import Iterator
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from pydantic import TypeAdapter
 from pydantic.dataclasses import rebuild_dataclass
@@ -69,7 +70,7 @@ class StreamingDataclassMixin:
 
     @classmethod
     def stream_validate_json(
-        cls: Type[Streamable],
+        cls: type[Streamable],
         source: Any,
     ) -> Streamable:
         adapter = cls._streaming_adapter()
@@ -79,7 +80,7 @@ class StreamingDataclassMixin:
 
     @classmethod
     def stream_validate_json_array(
-        cls: Type[Streamable],
+        cls: type[Streamable],
         source: Any,
         *,
         root_prefix: str | None = None,
@@ -94,7 +95,7 @@ class StreamingDataclassMixin:
 
     @classmethod
     def stream_validate_json_array_iter(
-        cls: Type[Streamable],
+        cls: type[Streamable],
         source: Any,
         *,
         chunk_size: int = 1_048_576,
@@ -135,7 +136,7 @@ class StreamingDataclassMixin:
 
     @classmethod
     def stream_validate_jsonl_iter(
-        cls: Type[Streamable],
+        cls: type[Streamable],
         source: Any,
     ) -> Iterator[Streamable]:
         adapter = cls._streaming_adapter()
@@ -163,7 +164,7 @@ class StreamingDataclassMixin:
 
     @classmethod
     def stream_validate_jsonl(
-        cls: Type[Streamable],
+        cls: type[Streamable],
         source: Any,
     ) -> list[Streamable]:
         return list(cls.stream_validate_jsonl_iter(source))

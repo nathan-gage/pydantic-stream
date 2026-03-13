@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, ClassVar, Iterator, Self, Type, TypeVar, cast
+from collections.abc import Iterator
+from typing import Any, ClassVar, Self, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import ValidationError
@@ -107,7 +108,7 @@ class StreamingBaseModelMixin(BaseModel):
 
     @classmethod
     def stream_model_validate_json(
-        cls: Type[StreamableModel],
+        cls: type[StreamableModel],
         source: Any,
     ) -> StreamableModel:
         adapter = cls._streaming_adapter()
@@ -117,7 +118,7 @@ class StreamingBaseModelMixin(BaseModel):
 
     @classmethod
     def stream_model_validate_json_array(
-        cls: Type[StreamableModel],
+        cls: type[StreamableModel],
         source: Any,
         *,
         root_prefix: str | None = None,
@@ -132,7 +133,7 @@ class StreamingBaseModelMixin(BaseModel):
 
     @classmethod
     def stream_model_validate_json_array_iter(
-        cls: Type[StreamableModel],
+        cls: type[StreamableModel],
         source: Any,
         *,
         chunk_size: int = 1_048_576,
@@ -176,7 +177,7 @@ class StreamingBaseModelMixin(BaseModel):
 
     @classmethod
     def stream_model_validate_jsonl_iter(
-        cls: Type[StreamableModel],
+        cls: type[StreamableModel],
         source: Any,
     ) -> Iterator[StreamableModel]:
         adapter = cls._streaming_adapter()
@@ -204,7 +205,7 @@ class StreamingBaseModelMixin(BaseModel):
 
     @classmethod
     def stream_model_validate_jsonl(
-        cls: Type[StreamableModel],
+        cls: type[StreamableModel],
         source: Any,
     ) -> list[StreamableModel]:
         return list(cls.stream_model_validate_jsonl_iter(source))
