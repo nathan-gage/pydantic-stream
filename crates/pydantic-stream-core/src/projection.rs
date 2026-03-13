@@ -5,10 +5,7 @@ use crate::spec::ObjectSpec;
 use crate::streaming::{navigate_to_prefix, trim_ascii};
 
 /// Project a single JSON object, returning projected JSON bytes.
-pub fn project_object(
-    input: &[u8],
-    spec: &ObjectSpec,
-) -> Result<Vec<u8>, StreamError> {
+pub fn project_object(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamError> {
     let mut jiter = Jiter::new(input);
     let peek = jiter.peek()?;
 
@@ -28,10 +25,7 @@ pub fn project_object(
 ///
 /// Input must be a JSON array `[{...}, {...}, ...]`.
 /// Returns a JSON array with only the fields specified by `spec`.
-pub fn project_array(
-    input: &[u8],
-    spec: &ObjectSpec,
-) -> Result<Vec<u8>, StreamError> {
+pub fn project_array(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamError> {
     let mut jiter = Jiter::new(input);
     let peek = jiter.peek()?;
 
@@ -71,10 +65,7 @@ pub fn project_array(
 }
 
 /// Project a JSON array of objects, returning one `Vec<u8>` per item.
-pub fn project_array_items(
-    input: &[u8],
-    spec: &ObjectSpec,
-) -> Result<Vec<Vec<u8>>, StreamError> {
+pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8>>, StreamError> {
     let mut jiter = Jiter::new(input);
     let peek = jiter.peek()?;
 
@@ -115,10 +106,7 @@ pub fn project_array_items(
 
 /// Project JSONL (newline-delimited JSON) input.
 /// Returns a Vec of projected JSON byte strings, one per line.
-pub fn project_jsonl(
-    input: &[u8],
-    spec: &ObjectSpec,
-) -> Result<Vec<Vec<u8>>, StreamError> {
+pub fn project_jsonl(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8>>, StreamError> {
     let mut results = Vec::new();
 
     for (line_number, line) in input.split(|&b| b == b'\n').enumerate() {
@@ -588,11 +576,8 @@ mod tests {
     #[test]
     fn array_multiple_objects_stripped() {
         let s = mk_spec(&[("x", field("x"))]);
-        let out = project_array(
-            b"[{\"x\":1,\"noise\":\"a\"},{\"x\":2,\"noise\":\"b\"}]",
-            &s,
-        )
-        .unwrap();
+        let out =
+            project_array(b"[{\"x\":1,\"noise\":\"a\"},{\"x\":2,\"noise\":\"b\"}]", &s).unwrap();
         assert_eq!(parse(&out), serde_json::json!([{"x":1},{"x":2}]));
     }
 

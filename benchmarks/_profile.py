@@ -2,7 +2,7 @@
 
 Usage:
     sudo py-spy record -o flamegraph.svg --native -- \
-        uv run python -m tests.streamable.benchmarks._profile
+        uv run python -m benchmarks._profile
 """
 
 import random

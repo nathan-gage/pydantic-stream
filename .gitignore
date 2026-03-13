@@ -5,3 +5,9 @@ __pycache__/
 *.dylib
 *.dSYM/
 .hypothesis/
+dist/
+*.egg-info/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

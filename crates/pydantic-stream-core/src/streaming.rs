@@ -257,7 +257,10 @@ mod tests {
         assert_eq!(result.items.len(), 4);
         assert!(result.finished);
         assert_eq!(&input[result.items[0].start..result.items[0].end], b"1");
-        assert_eq!(&input[result.items[1].start..result.items[1].end], b"\"hello\"");
+        assert_eq!(
+            &input[result.items[1].start..result.items[1].end],
+            b"\"hello\""
+        );
         assert_eq!(&input[result.items[2].start..result.items[2].end], b"true");
         assert_eq!(&input[result.items[3].start..result.items[3].end], b"null");
     }

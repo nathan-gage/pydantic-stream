@@ -1,0 +1,50 @@
+[project]
+name = "pydantic-stream"
+version = "0.1.0"
+description = "Rust-accelerated JSON streaming and projection for pydantic"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Nathan Gage", email = "nathan@sweetspotgov.com" },
+]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3",
+    "Framework :: Pydantic :: 2",
+    "Typing :: Typed",
+]
+keywords = ["pydantic", "json", "streaming", "rust", "projection"]
+dependencies = [
+    "pydantic>=2.11.0,<3.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "pytest",
+    "pytest-benchmark",
+    "pytest-memray",
+    "ruff",
+]
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+manifest-path = "crates/pydantic-stream-python/Cargo.toml"
+python-source = "src"
+module-name = "pydantic_stream._native"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

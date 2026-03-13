@@ -1,8 +1,17 @@
-"""Collects per-test peak memory via memray and prints a pytest-benchmark-style table.
+"""Benchmark conftest: CLI flags, memray memory measurement, and result tables.
 
-CLI flags (``--large-payload``, ``--payload-shape``) are registered in the
-parent conftest (``streamable/conftest.py``) so they are available before
-pytest parses the command line.
+CLI flags
+---------
+``--large-payload``
+    Enable ``@pytest.mark.large_payload`` tests (~100 MB per shape).
+
+``--no-memory``
+    Skip memray memory profiling in benchmarks (timing only).
+
+``--payload-shape``
+    Restrict large-payload tests to specific shapes.  Repeatable.
+    Values: ``default``, ``wide``, ``deep``, ``string-heavy``, ``many-small``, ``all``.
+    Default when omitted: ``all``.
 """
 
 from __future__ import annotations
@@ -15,7 +24,79 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import memray
+import pytest
 from memray import FileReader
+
+from ._data_gen import SHAPES, PayloadShape
+
+
+# ---------------------------------------------------------------------------
+# pytest hooks — CLI flags for benchmark shapes
+# ---------------------------------------------------------------------------
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("benchmarks", "Streamable memory benchmarks")
+    group.addoption(
+        "--large-payload",
+        action="store_true",
+        default=False,
+        help="Run large-payload (~100 MB) benchmark tests.",
+    )
+    group.addoption(
+        "--no-memory",
+        action="store_true",
+        default=False,
+        help="Skip memray memory profiling in benchmarks (timing only).",
+    )
+    group.addoption(
+        "--payload-shape",
+        action="append",
+        default=[],
+        metavar="SHAPE",
+        help=(
+            "Shape(s) to include for large-payload tests. "
+            "Repeatable. Values: default, wide, deep, string-heavy, many-small, all. "
+            "Default: all."
+        ),
+    )
+
+
+def _resolve_shapes(raw: list[str]) -> list[PayloadShape]:
+    """Normalise the ``--payload-shape`` CLI values into a concrete list."""
+    if not raw or "all" in raw:
+        return list(SHAPES)
+    resolved: list[PayloadShape] = []
+    for v in raw:
+        normed = v.strip().lower()
+        if normed in SHAPES:
+            resolved.append(normed)  # type: ignore[arg-type]
+        else:
+            raise pytest.UsageError(f"Unknown --payload-shape {v!r}. Choose from: {', '.join(SHAPES)}, all")
+    return resolved
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers",
+        "large_payload: mark test to run only with --large-payload flag",
+    )
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    large = config.getoption("--large-payload")
+    enabled_shapes = _resolve_shapes(config.getoption("--payload-shape"))
+
+    skip_large = pytest.mark.skip(reason="need --large-payload to run")
+    for item in items:
+        if "large_payload" not in item.keywords:
+            continue
+        if not large:
+            item.add_marker(skip_large)
+        elif hasattr(item, "callspec") and "shape" in item.callspec.params:
+            shape = item.callspec.params["shape"]
+            if shape not in enabled_shapes:
+                item.add_marker(pytest.mark.skip(reason=f"shape {shape!r} not in --payload-shape selection"))
 
 MEMORY_ROUNDS = int(os.environ.get("MEMORY_ROUNDS", "5"))
 

@@ -116,8 +116,14 @@ fn project_array_items_sliced(
         _ => Vec::new(),
     };
 
-    let result =
-        pydantic_stream_core::projection::project_array_items_sliced(data, &spec.inner, &segments, start, stop, step);
+    let result = pydantic_stream_core::projection::project_array_items_sliced(
+        data,
+        &spec.inner,
+        &segments,
+        start,
+        stop,
+        step,
+    );
 
     match result {
         Ok(items) => {
