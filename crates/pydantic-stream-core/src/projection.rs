@@ -542,7 +542,7 @@ fn jiter_abs_pos(jiter: &Jiter<'_>, input: &[u8]) -> usize {
 
 /// Skip a JSON string that has already had its opening `"` consumed.
 /// Returns the index immediately after the closing `"`.
-#[inline]
+#[inline(always)]
 fn fast_skip_string(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
     loop {
         // SIMD-accelerated search for `"` or `\`
@@ -580,7 +580,7 @@ const CONTAINER_STRUCTURAL: [u8; 256] = {
 /// Skip a JSON container (`{...}` or `[...]`) whose opening bracket has
 /// already been consumed.  `close` is the matching closing bracket.
 /// Returns the index immediately after the closing bracket.
-#[inline]
+#[inline(always)]
 fn fast_skip_container(data: &[u8], mut pos: usize, close: u8) -> Result<usize, JiterError> {
     let mut depth: u32 = 1;
     loop {
