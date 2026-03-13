@@ -382,17 +382,18 @@ fn project_object_inner(
     let mut first_field = true;
 
     if let Some(key) = first_key {
-        let key_owned = key.to_string();
-        process_key(jiter, input, spec, output, &key_owned, &mut first_field)?;
+        // `spec.fields.get(key)` is the last use of `key`; NLL releases the
+        // jiter borrow before `process_field` mutably borrows it again.
+        let field = spec.fields.get(key);
+        process_field(jiter, input, output, field, &mut first_field)?;
 
         loop {
-            let next = jiter.next_key()?;
-            match next {
-                Some(key) => {
-                    let key_owned = key.to_string();
-                    process_key(jiter, input, spec, output, &key_owned, &mut first_field)?;
-                }
+            match jiter.next_key()? {
                 None => break,
+                Some(key) => {
+                    let field = spec.fields.get(key);
+                    process_field(jiter, input, output, field, &mut first_field)?;
+                }
             }
         }
     }
@@ -401,17 +402,20 @@ fn project_object_inner(
     Ok(())
 }
 
-/// Process a single key-value pair during object projection.
+/// Process a single looked-up field during object projection.
+///
+/// Receives the already-resolved `Option<&FieldSpec>` so that the caller
+/// can drop the `key: &str` borrow on jiter before this function borrows
+/// jiter mutably again.
 #[inline]
-fn process_key(
+fn process_field(
     jiter: &mut Jiter<'_>,
     input: &[u8],
-    spec: &ObjectSpec,
     output: &mut Vec<u8>,
-    key: &str,
+    field: Option<&crate::spec::FieldSpec>,
     first_field: &mut bool,
 ) -> Result<(), JiterError> {
-    match spec.fields.get(key) {
+    match field {
         None => {
             jiter.next_skip()?;
         }
