@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
 from benchmarks._results import (
-    ARTIFACT_KEY,
     build_memory_comparisons,
-    build_timing_comparisons,
-    load_saved_benchmark_artifact,
+    load_saved_memory_artifact,
+    memory_storage_path,
     serialize_memory_results,
+    write_memory_histogram,
 )
 
 
@@ -19,6 +19,7 @@ class FakeMemoryStats:
     group: str
     samples: list[int]
     result_size: int
+    timeline_rounds: list[list[tuple[float, int]]] = field(default_factory=list)
 
     @property
     def min_val(self) -> float:
@@ -55,7 +56,7 @@ class FakeMemoryStats:
         return len(self.samples)
 
 
-def test_serialize_memory_results_embeds_context_and_stats() -> None:
+def test_serialize_memory_results_embeds_context_stats_and_metadata() -> None:
     memory_results = {
         "stream-default": FakeMemoryStats(
             name="stream-default",
@@ -68,45 +69,46 @@ def test_serialize_memory_results_embeds_context_and_stats() -> None:
     payload = serialize_memory_results(
         memory_results=memory_results,
         metadata={"payload_size_default": 1234},
-        context={"no_memory": False, "payload_shapes": ["default"]},
+        context={"markexpr": "not large_payload", "keyword": "wide"},
+        commit_info={"id": "abc123def456", "dirty": False},
+        created_at="2026-03-13T12:00:00+00:00",
     )
 
-    assert payload["context"]["payload_shapes"] == ["default"]
+    assert payload["datetime"] == "2026-03-13T12:00:00+00:00"
+    assert payload["commit_info"]["id"] == "abc123def456"
+    assert payload["context"]["markexpr"] == "not large_payload"
     assert payload["metadata"]["payload_size_default"] == 1234
     assert payload["memory_results"][0]["name"] == "stream-default"
     assert payload["memory_results"][0]["median"] == 110.0
+    assert "timeline_rounds" not in payload["memory_results"][0]
 
 
-def test_build_timing_comparisons_matches_on_fullname() -> None:
-    current = [
-        {
-            "group": "parse-default",
-            "name": "test_stream_basemodel[default]",
-            "fullname": "benchmarks/test_memory_benchmarks.py::test_stream_basemodel[default]",
-            "stats": {"median": 0.90},
-        }
-    ]
-    saved = {
-        "benchmarks": [
-            {
-                "group": "parse-default",
-                "name": "test_stream_basemodel[default]",
-                "fullname": "benchmarks/test_memory_benchmarks.py::test_stream_basemodel[default]",
-                "stats": {"median": 1.20},
-            }
-        ]
+def test_serialize_memory_results_includes_timeline_rounds_when_requested() -> None:
+    memory_results = {
+        "stream-default": FakeMemoryStats(
+            name="stream-default",
+            group="parse-default",
+            samples=[100, 120, 110],
+            result_size=64,
+            timeline_rounds=[[(0.0, 1024), (0.25, 4096)]],
+        )
     }
 
-    compare = build_timing_comparisons(current, saved)
+    payload = serialize_memory_results(
+        memory_results=memory_results,
+        metadata={},
+        context={},
+        include_data=True,
+        commit_info={"id": "abc123def456", "dirty": False},
+        created_at="2026-03-13T12:00:00+00:00",
+    )
 
-    assert compare["missing_from_saved"] == []
-    assert compare["missing_from_current"] == []
-    row = compare["groups"]["parse-default"][0]
-    assert row["ratio"] == pytest.approx(0.75)
-    assert row["delta_pct"] == pytest.approx(-25.0)
+    assert payload["memory_results"][0]["timeline_rounds"] == [
+        [{"seconds": 0.0, "rss": 1024}, {"seconds": 0.25, "rss": 4096}]
+    ]
 
 
-def test_build_memory_comparisons_reads_saved_pydantic_stream_section() -> None:
+def test_build_memory_comparisons_reads_saved_rows() -> None:
     current = {
         "stream-default": FakeMemoryStats(
             name="stream-default",
@@ -116,16 +118,13 @@ def test_build_memory_comparisons_reads_saved_pydantic_stream_section() -> None:
         )
     }
     saved = {
-        "benchmarks": [],
-        ARTIFACT_KEY: {
-            "memory_results": [
-                {
-                    "name": "stream-default",
-                    "group": "parse-default",
-                    "median": 120.0,
-                }
-            ]
-        },
+        "memory_results": [
+            {
+                "name": "stream-default",
+                "group": "parse-default",
+                "median": 120.0,
+            }
+        ]
     }
 
     compare = build_memory_comparisons(current, saved)
@@ -135,9 +134,32 @@ def test_build_memory_comparisons_reads_saved_pydantic_stream_section() -> None:
     assert row["delta_pct"] == pytest.approx(((95.0 - 120.0) / 120.0) * 100.0)
 
 
-def test_load_saved_benchmark_artifact_rejects_invalid_json(tmp_path) -> None:
+def test_load_saved_memory_artifact_rejects_invalid_json(tmp_path) -> None:
     path = tmp_path / "bad.json"
     path.write_text("{not json", encoding="utf-8")
 
     with pytest.raises(ValueError, match="not valid JSON"):
-        load_saved_benchmark_artifact(path)
+        load_saved_memory_artifact(path)
+
+
+def test_memory_storage_path_uses_memory_subdirectory(tmp_path) -> None:
+    storage = memory_storage_path(f"file://{tmp_path}")
+    assert storage == tmp_path / "memory"
+
+
+def test_write_memory_histogram_writes_svg(tmp_path) -> None:
+    stats = FakeMemoryStats(
+        name="stream-default",
+        group="parse-default",
+        samples=[100, 120, 110],
+        result_size=64,
+        timeline_rounds=[[(0.0, 1024), (0.1, 4096), (0.2, 2048)]],
+    )
+
+    output = write_memory_histogram(str(tmp_path / "memory_plot"), stats, previous_median=150.0)
+
+    contents = output.read_text(encoding="utf-8")
+    assert output.name == "memory_plot-stream-default.svg"
+    assert "<svg" in contents
+    assert "stream-default" in contents
+    assert "previous median peak" in contents

@@ -23,6 +23,8 @@ dependencies = [
 [dependency-groups]
 dev = [
     "hypothesis",
+    "pygal",
+    "pygaljs",
     "pytest",
     "pytest-benchmark",
     "pytest-memray",
@@ -42,7 +44,7 @@ features = ["extension-module"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "large_payload: mark test to run only with --large-payload flag",
+    "large_payload: mark heavy benchmark cases that should be selected explicitly",
 ]
 filterwarnings = [
     "error",

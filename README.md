@@ -109,31 +109,38 @@ The mixin is a drop-in addition — your existing pydantic models/dataclasses ke
 
 ## Development
 
-The repository now has a small developer CLI for test and benchmark workflows:
+Common fixed workflows live in the `Makefile`:
 
 ```bash
 uv sync
-uv run python tools/dev.py build
-uv run python tools/dev.py --help
+make dev
+make test
+make bench
+make bench-memory
 ```
 
-Useful examples:
+The Makefile is intentionally small. Use direct `pytest` commands whenever you
+need filters, benchmark save/compare output, or one-off options:
 
 ```bash
-uv run python tools/dev.py build
-uv run python tools/dev.py test --python-only --target tests/ -k chunked -q
-uv run python tools/dev.py bench --shape default --json benchmarks/results/before.json
-uv run python tools/dev.py bench --shape default --json benchmarks/results/after.json --compare-json benchmarks/results/before.json
-uv run python tools/dev.py bench --large --shape wide --no-memory
+uv run pytest tests/ -k chunked -q
+uv run pytest benchmarks/ --help
+uv run pytest benchmarks/test_memory_benchmarks.py benchmarks/test_slice_benchmarks.py \
+  -m "not large_payload" -k wide --benchmark-enable --benchmark-save before
+uv run pytest benchmarks/test_memory_profiles.py \
+  -m "not large_payload" -k wide --benchmark-save before --benchmark-histogram
 ```
 
-The `Makefile` is now just a thin wrapper around that CLI:
+Useful fixed targets:
 
 ```bash
 make dev
 make help
-make test-help
-make bench-help
+make build-release
+make test-rust
+make test-py
+make bench-large
+make bench-memory-large
 ```
 
 For raw pytest usage and the benchmark artifact save/compare flow, see

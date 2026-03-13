@@ -1,9 +1,8 @@
-PYTHON_SOURCES := src/ tests/ demo/ benchmarks/ tools/
-VENV_PYTHON := .venv/bin/python
+PYTHON_SOURCES := src/ tests/ demo/ benchmarks/
 
 .DEFAULT_GOAL := help
 
-.PHONY: .uv help venv dev test test-rust test-py test-help bench bench-large bench-help bench-save bench-compare lint fmt check
+.PHONY: .uv help dev build build-release test test-rust test-py bench bench-large bench-memory bench-memory-large lint fmt check
 
 .uv:
 	@uv -V >/dev/null 2>&1 || (printf "Please install uv: https://docs.astral.sh/uv/getting-started/installation/\n" >&2; exit 2)
@@ -11,71 +10,57 @@ VENV_PYTHON := .venv/bin/python
 help:
 	@printf "%s\n" \
 	"Targets:" \
-	"  make dev                 Sync deps and build the editable extension." \
-	"  make test                Run Rust + Python tests." \
-	"  make test-rust           Run cargo tests only." \
-	"  make test-py             Run Python tests only." \
-	"  make test-help           Show test CLI help." \
-	"  make bench               Run standard benchmarks." \
-	"  make bench-large         Run large-payload benchmarks." \
-	"  make bench-save          Run benchmarks and save a JSON artifact (path=...)." \
-	"  make bench-compare       Run benchmarks and compare against a prior artifact (path=... compare=...)." \
-	"  make bench-help          Show benchmark CLI help." \
-	"  make lint                Run clippy, rustfmt --check, and ruff." \
-	"  make fmt                 Format Rust and Python code." \
-	"  make check               Run lint + test." \
+	"  make dev            Sync deps and build the editable extension." \
+	"  make build          Build the editable extension." \
+	"  make build-release  Build the editable extension with --release." \
+	"  make test           Run Rust + Python tests." \
+	"  make test-rust      Run cargo tests only." \
+	"  make test-py        Run Python tests only." \
+	"  make bench          Run the standard timing benchmark suites." \
+	"  make bench-large    Run the large-payload timing benchmarks." \
+	"  make bench-memory   Run the standard memory benchmark suite." \
+	"  make bench-memory-large  Run the large-payload memory benchmarks." \
+	"  make lint           Run clippy, rustfmt --check, and ruff." \
+	"  make fmt            Format Rust and Python code." \
+	"  make check          Run lint + test." \
 	"" \
-	"Common usage:" \
-	"  uv run python tools/dev.py --help" \
-	"  uv run python tools/dev.py build --help" \
-	"  uv run python tools/dev.py test --help" \
-	"  uv run python tools/dev.py bench --help" \
-	"" \
-	"Examples:" \
-	"  make dev" \
-	"  make test-py args='--target tests/ -k chunked -q'" \
-	"  make bench args='--shape default -k test_stream_basemodel -q'" \
-	"  make bench-save path=benchmarks/results/before.json args='--shape default'" \
-	"  make bench-compare path=benchmarks/results/after.json compare=benchmarks/results/before.json args='--shape default'" \
+	"For custom pytest filters or benchmark save/compare runs, use pytest directly:" \
+	"  uv run pytest tests/ -k chunked -q" \
+	"  uv run pytest benchmarks/ --help" \
+	"  uv run pytest benchmarks/test_memory_benchmarks.py benchmarks/test_slice_benchmarks.py -m 'not large_payload' -k wide --benchmark-enable" \
+	"  uv run pytest benchmarks/test_memory_profiles.py -m 'not large_payload' --benchmark-save baseline --benchmark-histogram" \
 	"" \
 	"See also: benchmarks/README.md"
 
 dev: .uv
 	uv sync
-	$(VENV_PYTHON) tools/dev.py build
+	uv run maturin develop
 
-venv:
-	@test -x "$(VENV_PYTHON)" || (printf "missing $(VENV_PYTHON); run 'make dev' or 'uv sync' first\n" >&2; exit 2)
+build: .uv
+	uv run maturin develop
 
-test: venv
-	$(VENV_PYTHON) tools/dev.py test $(args)
+build-release: .uv
+	uv run maturin develop --release
 
-test-rust: venv
-	$(VENV_PYTHON) tools/dev.py test --rust-only $(args)
+test: test-rust test-py
 
-test-py: venv
-	$(VENV_PYTHON) tools/dev.py test --python-only $(args)
+test-rust: .uv
+	cargo test --workspace
 
-test-help:
-	python tools/dev.py test --help
+test-py: .uv
+	uv run pytest tests/
 
-bench: venv
-	$(VENV_PYTHON) tools/dev.py bench $(args)
+bench: .uv
+	uv run pytest benchmarks/test_memory_benchmarks.py benchmarks/test_slice_benchmarks.py -m "not large_payload" --benchmark-enable
 
-bench-large: venv
-	$(VENV_PYTHON) tools/dev.py bench --large $(args)
+bench-large: .uv
+	uv run pytest benchmarks/test_memory_benchmarks.py -m large_payload --benchmark-enable
 
-bench-save: venv
-	@test -n "$(path)" || (printf "usage: make bench-save path=benchmarks/results/run.json [args='...']\n" >&2; exit 2)
-	$(VENV_PYTHON) tools/dev.py bench --json $(path) $(args)
+bench-memory: .uv
+	uv run pytest benchmarks/test_memory_profiles.py -m "not large_payload"
 
-bench-compare: venv
-	@test -n "$(path)" || (printf "usage: make bench-compare path=benchmarks/results/after.json compare=benchmarks/results/before.json [args='...']\n" >&2; exit 2)
-	@test -n "$(compare)" || (printf "usage: make bench-compare path=benchmarks/results/after.json compare=benchmarks/results/before.json [args='...']\n" >&2; exit 2)
-	$(VENV_PYTHON) tools/dev.py bench --json $(path) --compare-json $(compare) $(args)
-
-bench-help:
-	python tools/dev.py bench --help
+bench-memory-large: .uv
+	uv run pytest benchmarks/test_memory_profiles.py -m large_payload
 
 lint: .uv
 	cargo clippy --workspace -- -D warnings
@@ -87,5 +72,4 @@ fmt: .uv
 	uv run ruff check --fix $(PYTHON_SOURCES)
 	uv run ruff format $(PYTHON_SOURCES)
 
-check: lint
-	$(MAKE) test
+check: lint test

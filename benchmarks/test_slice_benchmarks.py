@@ -6,31 +6,19 @@ and slicing the resulting list.  All payload shapes are tested.
 """
 
 import io
-import random
 
 import pytest
 
-from ._data_gen import SHAPES, PayloadShape, make_shaped_payload_bytes
 from ._models import (
     BenchUser_StreamDCSlots,
     BenchUser_StreamModel,
     pydantic_dc_slots_list_adapter,
     pydantic_model_list_adapter,
 )
+from ._parse_cases import BENCH_N, SHAPES, get_payload
 
-BENCH_N = 500
 SLICE_START = 245
 SLICE_STOP = 255
-
-# Cache generated payloads across tests within the same process.
-_payload_cache: dict[PayloadShape, bytes] = {}
-
-
-def _get_payload(shape: PayloadShape) -> bytes:
-    if shape not in _payload_cache:
-        random.seed(42)
-        _payload_cache[shape] = make_shaped_payload_bytes(shape, n=BENCH_N)
-    return _payload_cache[shape]
 
 
 # ---------------------------------------------------------------------------
@@ -40,8 +28,8 @@ def _get_payload(shape: PayloadShape) -> bytes:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="slice")
-def test_slice_stream_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_slice_stream_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"slice-{shape}"
 
     def fn() -> list:
@@ -54,8 +42,8 @@ def test_slice_stream_basemodel(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="slice")
-def test_slice_stream_dataclass_slots(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_slice_stream_dataclass_slots(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"slice-{shape}"
 
     def fn() -> list:
@@ -73,8 +61,8 @@ def test_slice_stream_dataclass_slots(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="slice")
-def test_slice_pydantic_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_slice_pydantic_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"slice-{shape}"
 
     def fn() -> list:
@@ -87,8 +75,8 @@ def test_slice_pydantic_basemodel(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="slice")
-def test_slice_pydantic_dataclass_slots(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_slice_pydantic_dataclass_slots(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"slice-{shape}"
 
     def fn() -> list:
@@ -106,8 +94,8 @@ def test_slice_pydantic_dataclass_slots(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="index")
-def test_index_stream_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_index_stream_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"index-{shape}"
 
     def fn() -> object:
@@ -120,8 +108,8 @@ def test_index_stream_basemodel(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="index")
-def test_index_pydantic_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_index_pydantic_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"index-{shape}"
 
     def fn() -> object:
@@ -139,8 +127,8 @@ def test_index_pydantic_basemodel(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="to_list")
-def test_to_list_stream_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_to_list_stream_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"to_list-{shape}"
 
     def fn() -> list:
@@ -153,8 +141,8 @@ def test_to_list_stream_basemodel(benchmark, shape: PayloadShape) -> None:
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="to_list")
-def test_to_list_pydantic_basemodel(benchmark, shape: PayloadShape) -> None:
-    data = _get_payload(shape)
+def test_to_list_pydantic_basemodel(benchmark, shape: str) -> None:
+    data = get_payload(shape)
     benchmark.group = f"to_list-{shape}"
 
     def fn() -> list:
