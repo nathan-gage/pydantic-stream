@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pydantic-stream-core = { path = "../pydantic-stream-core" }
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.26", features = ["extension-module"] }
 
 [lints]
 workspace = true
