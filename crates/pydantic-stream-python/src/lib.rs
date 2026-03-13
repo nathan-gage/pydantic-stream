@@ -23,11 +23,11 @@ fn extract_array_items(
     py: Python<'_>,
     data: &[u8],
     is_start: bool,
-) -> PyResult<(Vec<PyObject>, usize, bool)> {
+) -> PyResult<(Vec<Py<PyAny>>, usize, bool)> {
     let result = pydantic_stream_core::streaming::extract_array_items(data, is_start);
     match result {
         Ok(r) => {
-            let py_items: Vec<PyObject> = r
+            let py_items: Vec<Py<PyAny>> = r
                 .items
                 .iter()
                 .map(|span: &ByteSpan| PyBytes::new(py, &data[span.start..span.end]).into())
@@ -44,7 +44,7 @@ fn extract_array_items(
 
 /// Project a single JSON object, keeping only fields in the spec.
 #[pyfunction]
-fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<PyObject> {
+fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
     let result = pydantic_stream_core::projection::project_object(data, &spec.inner);
     match result {
         Ok(bytes) => Ok(PyBytes::new(py, &bytes).into()),
@@ -54,7 +54,7 @@ fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<
 
 /// Project a JSON array of objects, keeping only fields in the spec.
 #[pyfunction]
-fn project_array(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<PyObject> {
+fn project_array(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
     let result = pydantic_stream_core::projection::project_array(data, &spec.inner);
     match result {
         Ok(bytes) => Ok(PyBytes::new(py, &bytes).into()),
@@ -68,11 +68,11 @@ fn project_array_items(
     py: Python<'_>,
     data: &[u8],
     spec: &PyObjectSpec,
-) -> PyResult<Vec<PyObject>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     let result = pydantic_stream_core::projection::project_array_items(data, &spec.inner);
     match result {
         Ok(items) => {
-            let py_items: Vec<PyObject> = items
+            let py_items: Vec<Py<PyAny>> = items
                 .iter()
                 .map(|item| PyBytes::new(py, item).into())
                 .collect();
@@ -84,11 +84,11 @@ fn project_array_items(
 
 /// Project JSONL input, returning a list of projected JSON byte strings.
 #[pyfunction]
-fn project_jsonl(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Vec<PyObject>> {
+fn project_jsonl(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Vec<Py<PyAny>>> {
     let result = pydantic_stream_core::projection::project_jsonl(data, &spec.inner);
     match result {
         Ok(lines) => {
-            let py_lines: Vec<PyObject> = lines
+            let py_lines: Vec<Py<PyAny>> = lines
                 .iter()
                 .map(|line| PyBytes::new(py, line).into())
                 .collect();
@@ -110,7 +110,7 @@ fn project_array_items_sliced(
     start: usize,
     stop: Option<usize>,
     step: usize,
-) -> PyResult<Vec<PyObject>> {
+) -> PyResult<Vec<Py<PyAny>>> {
     let segments: Vec<&str> = match prefix {
         Some(p) if !p.is_empty() => p.split('.').collect(),
         _ => Vec::new(),
@@ -127,7 +127,7 @@ fn project_array_items_sliced(
 
     match result {
         Ok(items) => {
-            let py_items: Vec<PyObject> = items
+            let py_items: Vec<Py<PyAny>> = items
                 .iter()
                 .map(|item| PyBytes::new(py, item).into())
                 .collect();
@@ -145,7 +145,7 @@ fn project_array_nav(
     data: &[u8],
     spec: &PyObjectSpec,
     prefix: Option<&str>,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let segments: Vec<&str> = match prefix {
         Some(p) if !p.is_empty() => p.split('.').collect(),
         _ => Vec::new(),
@@ -167,12 +167,12 @@ fn project_array_items_partial(
     data: &[u8],
     spec: &PyObjectSpec,
     is_start: bool,
-) -> PyResult<(Vec<PyObject>, usize, bool)> {
+) -> PyResult<(Vec<Py<PyAny>>, usize, bool)> {
     let result =
         pydantic_stream_core::projection::project_array_items_partial(data, &spec.inner, is_start);
     match result {
         Ok(r) => {
-            let py_items: Vec<PyObject> = r
+            let py_items: Vec<Py<PyAny>> = r
                 .items
                 .iter()
                 .map(|item| PyBytes::new(py, item).into())
