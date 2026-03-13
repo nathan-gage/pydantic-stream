@@ -651,55 +651,45 @@ fn fast_skip_value(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
 /// Assumes the object's known fields have already been projected and jiter is
 /// positioned at the start of the first unknown value.
 fn fast_skip_to_object_end(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
-    // 1. Skip the current (unknown) value.
+    // Skip the first (current) unknown value.
     pos = fast_skip_value(data, pos)?;
 
-    // 2. Skip remaining key:value pairs until the object's closing `}`.
+    // Scan the rest of the object using CONTAINER_STRUCTURAL.
+    //
+    // Commas (`,`) and colons (`:`) are NOT in CONTAINER_STRUCTURAL so the
+    // scan skips over them as regular bytes.  This avoids per-pair conditional
+    // checks (whitespace loops, comma/colon checks) and lets LLVM generate a
+    // single tight SIMD scan loop for the common compact-JSON case.
+    //
+    // Depth tracks nesting for containers that appear as values.  When depth
+    // drops to zero at `}` we have found the enclosing object's closing brace.
+    let mut depth: u32 = 0;
     loop {
-        while pos < data.len() && data[pos].is_ascii_whitespace() {
-            pos += 1;
-        }
-        match data.get(pos) {
-            Some(&b'}') => return Ok(pos + 1),
-            Some(&b',') => {
-                pos += 1;
-                // Skip whitespace before key.
-                while pos < data.len() && data[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
-                // Skip the key string.
-                if data.get(pos) != Some(&b'"') {
-                    return Err(JiterError {
-                        error_type: JiterErrorType::JsonError(
-                            JsonErrorType::EofWhileParsingObject,
-                        ),
-                        index: pos,
-                    });
-                }
+        let offset = data[pos..]
+            .iter()
+            .position(|&b| CONTAINER_STRUCTURAL[b as usize] != 0)
+            .ok_or(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingObject),
+                index: pos,
+            })?;
+        pos += offset;
+        match data[pos] {
+            b'"' => {
+                // Either a key string or a string value — skip it.
                 pos = fast_skip_string(data, pos + 1)?;
-                // Skip whitespace + colon.
-                while pos < data.len() && data[pos].is_ascii_whitespace() {
-                    pos += 1;
-                }
-                if data.get(pos) != Some(&b':') {
-                    return Err(JiterError {
-                        error_type: JiterErrorType::JsonError(
-                            JsonErrorType::ExpectedObjectCommaOrEnd,
-                        ),
-                        index: pos,
-                    });
-                }
+            }
+            b'{' | b'[' => {
+                depth += 1;
                 pos += 1;
-                // Skip the value.
-                pos = fast_skip_value(data, pos)?;
             }
             _ => {
-                return Err(JiterError {
-                    error_type: JiterErrorType::JsonError(
-                        JsonErrorType::ExpectedObjectCommaOrEnd,
-                    ),
-                    index: pos,
-                })
+                // b'}' or b']' — closing a container.
+                pos += 1;
+                if depth == 0 {
+                    // This is the closing `}` of the object we were called to skip.
+                    return Ok(pos);
+                }
+                depth -= 1;
             }
         }
     }
