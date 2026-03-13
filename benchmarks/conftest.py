@@ -9,7 +9,7 @@ CLI flags
     Skip memray memory profiling in benchmarks (timing only).
 
 ``--payload-shape``
-    Restrict large-payload tests to specific shapes.  Repeatable.
+    Restrict benchmarks to specific shapes.  Repeatable.
     Values: ``default``, ``wide``, ``deep``, ``string-heavy``, ``many-small``, ``all``.
     Default when omitted: ``all``.
 """
@@ -85,18 +85,24 @@ def pytest_configure(config: pytest.Config) -> None:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     large = config.getoption("--large-payload")
-    enabled_shapes = _resolve_shapes(config.getoption("--payload-shape"))
+    raw_shapes = config.getoption("--payload-shape")
+    enabled_shapes = _resolve_shapes(raw_shapes)
 
     skip_large = pytest.mark.skip(reason="need --large-payload to run")
     for item in items:
-        if "large_payload" not in item.keywords:
-            continue
-        if not large:
+        # Gate large-payload tests behind --large-payload flag
+        if "large_payload" in item.keywords and not large:
             item.add_marker(skip_large)
-        elif hasattr(item, "callspec") and "shape" in item.callspec.params:
+            continue
+
+        # Filter by --payload-shape for any parametrized shape test
+        if hasattr(item, "callspec") and "shape" in item.callspec.params:
             shape = item.callspec.params["shape"]
             if shape not in enabled_shapes:
                 item.add_marker(pytest.mark.skip(reason=f"shape {shape!r} not in --payload-shape selection"))
+
+    # Deterministic ordering: sort by node ID so test names are always consistent.
+    items.sort(key=lambda item: item.nodeid)
 
 MEMORY_ROUNDS = int(os.environ.get("MEMORY_ROUNDS", "5"))
 

@@ -16,7 +16,7 @@ create_exception!(_native, StreamingProjectionError, PyRuntimeError);
 // ---------------------------------------------------------------------------
 
 /// Extract complete JSON items from a (possibly incomplete) JSON array buffer.
-/// Returns (item_bytes_list, consumed_bytes, finished).
+/// Returns (`item_bytes_list`, `consumed_bytes`, `finished`).
 #[pyfunction]
 #[pyo3(signature = (data, is_start=true))]
 fn extract_array_items(
@@ -183,8 +183,8 @@ fn project_array_items_partial(
     }
 }
 
-/// PyO3 module definition.
-#[pymodule]
+/// `PyO3` module definition.
+#[pymodule(gil_used = false)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Types
     m.add_class::<PyFieldSpec>()?;

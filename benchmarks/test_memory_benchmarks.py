@@ -3,14 +3,19 @@
 Timing: pytest-benchmark (statistical, multi-round).
 Memory: memray (all allocations including C/Rust), printed as a comparison table.
 
+All benchmarks run across every payload shape (default, wide, deep,
+string-heavy, many-small).  Use ``--payload-shape`` to restrict::
+
+    pytest benchmarks/                                # all shapes, standard size
+    pytest benchmarks/ --payload-shape wide           # just "wide"
+    pytest benchmarks/ --payload-shape deep --payload-shape string-heavy
+
 Large-payload tests (``--large-payload``)
 -----------------------------------------
-Run with ``--large-payload`` to enable ~100 MB benchmarks across multiple
-payload shapes.  Use ``--payload-shape`` to restrict to specific shapes::
+Run with ``--large-payload`` to additionally enable ~100 MB benchmarks::
 
-    pytest --large-payload                            # all shapes
-    pytest --large-payload --payload-shape wide       # just "wide"
-    pytest --large-payload --payload-shape deep --payload-shape string-heavy
+    pytest --large-payload                            # all shapes, both sizes
+    pytest --large-payload --payload-shape wide       # just "wide", both sizes
 """
 
 import io
@@ -23,7 +28,6 @@ from ._data_gen import (
     LARGE_RECORD_COUNTS,
     SHAPES,
     PayloadShape,
-    make_benchmark_payload_bytes,
     make_shaped_payload_bytes,
 )
 from ._models import (
@@ -51,88 +55,118 @@ def _memory_disabled(request: pytest.FixtureRequest) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Standard benchmarks (~13 MB, always run)
+# Standard benchmarks (500 records, all shapes, always run)
 # ---------------------------------------------------------------------------
 
-
-@pytest.fixture(scope="module")
-def source_bytes() -> bytes:
-    random.seed(42)
-    data = make_benchmark_payload_bytes(BENCH_N)
-    metadata["payload_size"] = len(data)
-    return data
+# Cache generated payloads across tests within the same process.
+_payload_cache: dict[PayloadShape, bytes] = {}
 
 
+def _get_payload(shape: PayloadShape) -> bytes:
+    if shape not in _payload_cache:
+        random.seed(42)
+        _payload_cache[shape] = make_shaped_payload_bytes(shape, n=BENCH_N)
+    return _payload_cache[shape]
+
+
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_stream_basemodel(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_stream_basemodel(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return list(BenchUser_StreamModel.stream_model_validate_json_array(io.BytesIO(source_bytes)))
+        return list(BenchUser_StreamModel.stream_model_validate_json_array(io.BytesIO(data)))
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("stream-basemodel", fn)
+        measure_memory(f"stream-basemodel-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_stream_dataclass(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_stream_dataclass(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return list(BenchUser_StreamDC.stream_validate_json_array(io.BytesIO(source_bytes)))
+        return list(BenchUser_StreamDC.stream_validate_json_array(io.BytesIO(data)))
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("stream-dataclass", fn)
+        measure_memory(f"stream-dataclass-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_stream_dataclass_slots(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_stream_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return list(BenchUser_StreamDCSlots.stream_validate_json_array(io.BytesIO(source_bytes)))
+        return list(BenchUser_StreamDCSlots.stream_validate_json_array(io.BytesIO(data)))
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("stream-dataclass-slots", fn)
+        measure_memory(f"stream-dataclass-slots-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_pydantic_basemodel(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_pydantic_basemodel(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return pydantic_model_list_adapter.validate_json(source_bytes)
+        return pydantic_model_list_adapter.validate_json(data)
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("pydantic-basemodel", fn)
+        measure_memory(f"pydantic-basemodel-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_pydantic_dataclass(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_pydantic_dataclass(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return pydantic_dc_list_adapter.validate_json(source_bytes)
+        return pydantic_dc_list_adapter.validate_json(data)
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("pydantic-dataclass", fn)
+        measure_memory(f"pydantic-dataclass-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_pydantic_dataclass_slots(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_pydantic_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def fn() -> list:
-        return pydantic_dc_slots_list_adapter.validate_json(source_bytes)
+        return pydantic_dc_slots_list_adapter.validate_json(data)
 
     result = benchmark(fn)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("pydantic-dataclass-slots", fn)
+        measure_memory(f"pydantic-dataclass-slots-{shape}", fn, group=f"parse-{shape}")
 
 
+@pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_stdlib_slots(benchmark, source_bytes: bytes, request: pytest.FixtureRequest) -> None:
+def test_stdlib_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+    data = _get_payload(shape)
+    benchmark.group = f"parse-{shape}"
+
     def parse() -> list[BenchUser_StdlibDC]:
-        raw = json.loads(source_bytes)
+        raw = json.loads(data)
         return [
             BenchUser_StdlibDC(
                 id=r["id"],
@@ -151,7 +185,7 @@ def test_stdlib_slots(benchmark, source_bytes: bytes, request: pytest.FixtureReq
     result = benchmark(parse)
     assert len(result) == BENCH_N
     if not _memory_disabled(request):
-        measure_memory("stdlib-slots", parse)
+        measure_memory(f"stdlib-slots-{shape}", parse, group=f"parse-{shape}")
 
 
 # ---------------------------------------------------------------------------
