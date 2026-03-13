@@ -7,6 +7,7 @@ description = "JSON streaming and projection engine built on jiter"
 [dependencies]
 ahash = "0.8"
 jiter = "0.11.1"
+memchr = "2"
 
 [dev-dependencies]
 serde_json = { version = "1", default-features = false, features = ["std"] }
