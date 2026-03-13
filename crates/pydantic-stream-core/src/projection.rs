@@ -1,4 +1,4 @@
-use jiter::{Jiter, Peek};
+use jiter::{Jiter, JiterError, Peek};
 
 use crate::error::StreamError;
 use crate::spec::ObjectSpec;
@@ -15,8 +15,7 @@ pub fn project_object(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, Stream
         )));
     }
 
-    let mut output = Vec::with_capacity(256);
-    project_object_inner(&mut jiter, input, spec, &mut output)?;
+    let output = project_object_from_current(&mut jiter, input, spec)?;
     jiter.finish()?;
     Ok(output)
 }
@@ -327,11 +326,10 @@ pub fn project_array_items_partial(
             }
             b'{' => {
                 let slice = &input[pos..];
-                let mut scanner = Jiter::new(slice);
-                match scanner.next_skip() {
-                    Ok(()) => {
-                        let obj_end = pos + scanner.current_index();
-                        let projected = project_object(&input[pos..obj_end], spec)?;
+                let mut jiter = Jiter::new(slice);
+                match project_object_from_current(&mut jiter, slice, spec) {
+                    Ok(projected) => {
+                        let obj_end = pos + jiter.current_index();
                         items.push(projected);
                         pos = obj_end;
                     }
@@ -359,6 +357,17 @@ pub fn project_array_items_partial(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Project the object at the current parser position into a new buffer.
+fn project_object_from_current(
+    jiter: &mut Jiter<'_>,
+    input: &[u8],
+    spec: &ObjectSpec,
+) -> Result<Vec<u8>, JiterError> {
+    let mut output = Vec::with_capacity(256);
+    project_object_inner(jiter, input, spec, &mut output)?;
+    Ok(output)
+}
+
 /// Project a single object from the current jiter position.
 /// Assumes jiter has already peeked `Peek::Object`.
 fn project_object_inner(
@@ -366,7 +375,7 @@ fn project_object_inner(
     input: &[u8],
     spec: &ObjectSpec,
     output: &mut Vec<u8>,
-) -> Result<(), StreamError> {
+) -> Result<(), JiterError> {
     let first_key = jiter.known_object()?;
 
     output.push(b'{');
@@ -401,7 +410,7 @@ fn process_key(
     output: &mut Vec<u8>,
     key: &str,
     first_field: &mut bool,
-) -> Result<(), StreamError> {
+) -> Result<(), JiterError> {
     match spec.fields.get(key) {
         None => {
             jiter.next_skip()?;
@@ -436,7 +445,7 @@ fn copy_raw_value(
     output: &mut Vec<u8>,
     output_key: &str,
     first_field: &mut bool,
-) -> Result<(), StreamError> {
+) -> Result<(), JiterError> {
     let start = jiter.current_index();
     jiter.next_skip()?;
     let end = jiter.current_index();
@@ -740,6 +749,17 @@ mod tests {
             parse_items(&result.items),
             vec![serde_json::json!({"x": 1})]
         );
+    }
+
+    #[test]
+    fn partial_incomplete_unknown_field_returns_partial() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = br#"[{"x":1,"skip":{"nested":1"#;
+        let result = project_array_items_partial(input, &s, true).unwrap();
+
+        assert!(!result.finished);
+        assert_eq!(result.consumed, 1);
+        assert!(result.items.is_empty());
     }
 
     #[test]
