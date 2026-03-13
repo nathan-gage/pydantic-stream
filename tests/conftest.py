@@ -12,12 +12,10 @@ from .cases import (
     ALIAS_CHOICE_CASES,
     ALL_CASES,
     POPULATE_BY_NAME_CASES,
-    RICH_CASES,
     USER_CASES,
     StreamableCase,
     reset_streaming_harness_caches,
 )
-from .helpers import SourceFactory
 
 # ---------------------------------------------------------------------------
 # Hypothesis
@@ -49,11 +47,6 @@ def reset_streamable_harness_state() -> None:
     reset_streaming_harness_caches()
 
 
-@pytest.fixture
-def source_factory() -> SourceFactory:
-    return SourceFactory()
-
-
 @pytest.fixture(params=ALL_CASES, ids=_case_id)
 def any_stream_case(request: pytest.FixtureRequest) -> StreamableCase:
     return request.param
@@ -71,9 +64,4 @@ def alias_choice_case(request: pytest.FixtureRequest) -> StreamableCase:
 
 @pytest.fixture(params=POPULATE_BY_NAME_CASES, ids=_case_id)
 def populate_by_name_case(request: pytest.FixtureRequest) -> StreamableCase:
-    return request.param
-
-
-@pytest.fixture(params=RICH_CASES, ids=_case_id)
-def rich_case(request: pytest.FixtureRequest) -> StreamableCase:
     return request.param

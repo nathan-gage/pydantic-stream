@@ -65,7 +65,9 @@ _payload_cache: dict[PayloadShape, bytes] = {}
 def _get_payload(shape: PayloadShape) -> bytes:
     if shape not in _payload_cache:
         random.seed(42)
-        _payload_cache[shape] = make_shaped_payload_bytes(shape, n=BENCH_N)
+        data = make_shaped_payload_bytes(shape, n=BENCH_N)
+        _payload_cache[shape] = data
+        metadata[f"payload_size_{shape}"] = len(data)
     return _payload_cache[shape]
 
 

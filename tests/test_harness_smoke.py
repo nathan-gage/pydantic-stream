@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 
 from .assertions import (
     assert_json_array_matches_direct,
@@ -39,6 +39,8 @@ def test_user_case_sample_payloads_match_direct_validation(user_case: Streamable
 
 @given(payloads=user_payload_lists())
 @settings(max_examples=25)
+@example(payloads=[])
+@example(payloads=[{"id": 1, "name": "a"}])
 def test_user_case_property_array_matches_direct_validation(
     user_case: StreamableCase,
     payloads: list[dict[str, object]],
@@ -49,6 +51,8 @@ def test_user_case_property_array_matches_direct_validation(
 
 @given(payload=alias_choice_payloads(include_unknown=True))
 @settings(max_examples=25)
+@example(payload={"label": "x", "external_id": 1})
+@example(payload={"label": "x", "legacy_id": 2})
 def test_alias_choice_case_property_matches_direct_validation(
     alias_choice_case: StreamableCase,
     payload: dict[str, object],
@@ -58,6 +62,8 @@ def test_alias_choice_case_property_matches_direct_validation(
 
 @given(payload=populate_by_name_payloads(include_unknown=True))
 @settings(max_examples=25)
+@example(payload={"city": "NYC", "zip": 10001})
+@example(payload={"city": "NYC", "zip_code": 10001})
 def test_populate_by_name_case_property_matches_direct_validation(
     populate_by_name_case: StreamableCase,
     payload: dict[str, object],

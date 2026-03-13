@@ -2,15 +2,20 @@
 
 dev:
 	uv sync
-	maturin develop --release
+	maturin develop
 
 test: dev
+	cargo test
 	uv run pytest tests/
 
-bench: dev
+bench:
+	uv sync
+	maturin develop --release
 	uv run pytest benchmarks/ --benchmark-enable
 
-bench-large: dev
+bench-large:
+	uv sync
+	maturin develop --release
 	uv run pytest benchmarks/ --benchmark-enable --large-payload
 
 lint:

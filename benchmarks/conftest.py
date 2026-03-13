@@ -76,13 +76,6 @@ def _resolve_shapes(raw: list[str]) -> list[PayloadShape]:
     return resolved
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line(
-        "markers",
-        "large_payload: mark test to run only with --large-payload flag",
-    )
-
-
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     large = config.getoption("--large-payload")
     raw_shapes = config.getoption("--payload-shape")
@@ -366,12 +359,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):  # noqa: ARG0
 
     for group_name, group_results in groups.items():
         group_results.sort(key=lambda r: r.median_val)
-        # Pick payload size: for large-parse groups use the shape-specific size
-        if group_name.startswith("large-parse-"):
-            shape = group_name.removeprefix("large-parse-")
-            payload_size = metadata.get(f"payload_size_{shape}", 0)
-        else:
-            payload_size = metadata.get("payload_size", 0)
+        # Extract shape from group name (e.g. "parse-wide", "large-parse-deep")
+        payload_size = 0
+        for prefix in ("large-parse-", "parse-"):
+            if group_name.startswith(prefix):
+                shape = group_name.removeprefix(prefix)
+                payload_size = metadata.get(f"payload_size_{shape}", 0)
+                break
         _render_memory_table(terminalreporter, group_name, group_results, payload_size)
 
     terminalreporter.write_line("")

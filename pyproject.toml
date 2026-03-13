@@ -37,10 +37,17 @@ build-backend = "maturin"
 manifest-path = "crates/pydantic-stream-python/Cargo.toml"
 python-source = "src"
 module-name = "pydantic_stream._native"
-features = ["pyo3/extension-module"]
+features = ["extension-module"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "large_payload: mark test to run only with --large-payload flag",
+]
+filterwarnings = [
+    "error",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 target-version = "py311"
