@@ -1,4 +1,4 @@
-.PHONY: dev test bench bench-large lint fmt check clean
+.PHONY: dev test bench bench-large lint fmt check
 
 dev:
 	uv sync
@@ -29,7 +29,3 @@ fmt:
 	uv run ruff format src/
 
 check: lint test
-
-clean:
-	cargo clean
-	rm -rf dist/ *.egg-info/ .pytest_cache/ .ruff_cache/ .mypy_cache/
