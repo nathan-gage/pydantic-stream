@@ -40,19 +40,29 @@ def input_keys_for_field(
     if alias is None:
         return (name,)
 
+    def unsupported_alias_error() -> StreamingProjectionError:
+        return StreamingProjectionError(
+            f"Unsupported validation_alias for field {name!r}: "
+            "nested alias paths are not supported by the streaming projector"
+        )
+
     alias_keys: tuple[str, ...] = ()
     if validate_by_alias:
         if isinstance(alias, str):
             alias_keys = (alias,)
         elif isinstance(alias, list):
+            if alias and all(isinstance(item, str) for item in alias):
+                raise unsupported_alias_error()
+
             flat: list[str] = []
             for item in alias:
                 if isinstance(item, list) and len(item) == 1 and isinstance(item[0], str):
                     flat.append(item[0])
                 else:
-                    flat = []
-                    break
-            alias_keys = tuple(flat) if flat else ()
+                    raise unsupported_alias_error()
+            alias_keys = tuple(flat)
+        else:
+            raise unsupported_alias_error()
 
     if validate_by_name and name not in alias_keys:
         return alias_keys + (name,)

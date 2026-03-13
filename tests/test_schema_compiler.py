@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pydantic import BaseModel, TypeAdapter
+from pydantic import AliasPath, BaseModel, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
 
@@ -132,15 +132,16 @@ class TestInputKeysForField:
         result = input_keys_for_field(field, validate_by_alias=True)
         assert result == ("external_id", "legacy_id")
 
-    def test_alias_choices_with_nested_path_falls_back_to_name(self) -> None:
-        # Multi-element inner list means path alias — not supported, falls back
-        field = {
-            "name": "record_id",
-            "validation_alias": [["data", "external_id"]],
-            "schema": {"type": "int"},
-        }
-        result = input_keys_for_field(field, validate_by_alias=True)
-        assert result == ("record_id",)
+    def test_alias_path_raises_for_unsupported_nested_lookup(self) -> None:
+        class AliasPathModel(BaseModel):
+            record_id: int = Field(validation_alias=AliasPath("data", "external_id"))
+
+        field_schema = TypeAdapter(AliasPathModel).core_schema["schema"]["fields"]["record_id"]
+        with pytest.raises(StreamingProjectionError, match="nested alias paths"):
+            input_keys_for_field(
+                {**field_schema, "name": "record_id"},
+                validate_by_alias=True,
+            )
 
     def test_validate_by_name_appends_name(self) -> None:
         field = {"name": "my_field", "validation_alias": "myAlias", "schema": {"type": "int"}}

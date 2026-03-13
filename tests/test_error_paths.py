@@ -7,7 +7,7 @@ from io import BytesIO, StringIO
 from typing import Any
 
 import pytest
-from pydantic import ConfigDict, model_validator
+from pydantic import AliasPath, ConfigDict, Field, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
 from pydantic_core import ValidationError
@@ -171,6 +171,30 @@ class TestSpecCaching:
         assert "x" in child_spec
         assert "y" in child_spec
         assert "y" not in parent_spec
+
+
+# ---------------------------------------------------------------------------
+# Unsupported alias-path schemas
+# ---------------------------------------------------------------------------
+
+
+class TestUnsupportedAliasPaths:
+    def test_basemodel_alias_path_raises_during_spec_compilation(self) -> None:
+        class AliasPathModel(StreamingBaseModelMixin):
+            record_id: int = Field(validation_alias=AliasPath("data", "id"))
+
+        with pytest.raises(StreamingProjectionError, match="nested alias paths"):
+            AliasPathModel._streaming_spec()
+
+    def test_dataclass_alias_path_raises_during_spec_compilation(self) -> None:
+        @pydantic_dataclass
+        class AliasPathDataclass(StreamingDataclassMixin):
+            record_id: int = Field(validation_alias=AliasPath("data", "id"))
+
+        rebuild_dataclass(AliasPathDataclass)  # type: ignore[arg-type]
+
+        with pytest.raises(StreamingProjectionError, match="nested alias paths"):
+            AliasPathDataclass._streaming_spec()
 
 
 # ---------------------------------------------------------------------------
