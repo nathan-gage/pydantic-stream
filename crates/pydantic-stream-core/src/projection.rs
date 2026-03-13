@@ -581,7 +581,11 @@ const CONTAINER_STRUCTURAL: [u8; 256] = {
 /// already been consumed.  `close` is the matching closing bracket.
 /// Returns the index immediately after the closing bracket.
 #[inline(always)]
-fn fast_skip_container(data: &[u8], mut pos: usize, close: u8) -> Result<usize, JiterError> {
+fn fast_skip_container(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
+    // Depth starts at 1 (we are inside the opening bracket that has already
+    // been consumed by the caller).  The input is always valid JSON (jiter
+    // pre-validated it), so the first `}` / `]` that brings depth to 0 is
+    // the matching closing bracket — no explicit `close` check needed.
     let mut depth: u32 = 1;
     loop {
         // Find the next structural character via a lookup-table scan.
@@ -603,12 +607,12 @@ fn fast_skip_container(data: &[u8], mut pos: usize, close: u8) -> Result<usize, 
                 pos += 1;
             }
             _ => {
-                // `}` or `]`
+                // `}` or `]` — closing a container.
+                depth -= 1;
                 pos += 1;
-                if depth == 1 && data[pos - 1] == close {
+                if depth == 0 {
                     return Ok(pos);
                 }
-                depth -= 1;
             }
         }
     }
@@ -627,8 +631,8 @@ fn fast_skip_value(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
             index: pos,
         }),
         Some(&b'"') => fast_skip_string(data, pos + 1),
-        Some(&b'{') => fast_skip_container(data, pos + 1, b'}'),
-        Some(&b'[') => fast_skip_container(data, pos + 1, b']'),
+        Some(&b'{') => fast_skip_container(data, pos + 1),
+        Some(&b'[') => fast_skip_container(data, pos + 1),
         Some(b't' | b'n') => Ok(pos + 4), // true / null (both 4 bytes)
         Some(&b'f') => Ok(pos + 5),               // false
         _ => {
