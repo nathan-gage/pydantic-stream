@@ -103,7 +103,9 @@ def test_stream_dataclass(benchmark, shape: PayloadShape, request: pytest.Fixtur
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_stream_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_stream_dataclass_slots(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     data = _get_payload(shape)
     benchmark.group = f"parse-{shape}"
 
@@ -148,7 +150,9 @@ def test_pydantic_dataclass(benchmark, shape: PayloadShape, request: pytest.Fixt
 
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
 @pytest.mark.benchmark(group="parse")
-def test_pydantic_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_pydantic_dataclass_slots(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     data = _get_payload(shape)
     benchmark.group = f"parse-{shape}"
 
@@ -208,7 +212,9 @@ def _get_large_payload(shape: PayloadShape) -> bytes:
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_stream_basemodel(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_stream_basemodel(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -220,12 +226,16 @@ def test_large_stream_basemodel(benchmark, shape: PayloadShape, request: pytest.
     assert len(result) == expected
     metadata[f"payload_size_{shape}"] = len(data)
     if not _memory_disabled(request):
-        measure_memory(f"large-stream-basemodel-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-stream-basemodel-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_stream_dataclass(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_stream_dataclass(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -236,12 +246,16 @@ def test_large_stream_dataclass(benchmark, shape: PayloadShape, request: pytest.
     result = benchmark.pedantic(fn, rounds=3, warmup_rounds=0)
     assert len(result) == expected
     if not _memory_disabled(request):
-        measure_memory(f"large-stream-dataclass-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-stream-dataclass-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_pydantic_basemodel(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_pydantic_basemodel(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -252,12 +266,16 @@ def test_large_pydantic_basemodel(benchmark, shape: PayloadShape, request: pytes
     result = benchmark.pedantic(fn, rounds=3, warmup_rounds=0)
     assert len(result) == expected
     if not _memory_disabled(request):
-        measure_memory(f"large-pydantic-basemodel-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-pydantic-basemodel-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_stream_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_stream_dataclass_slots(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -268,12 +286,16 @@ def test_large_stream_dataclass_slots(benchmark, shape: PayloadShape, request: p
     result = benchmark.pedantic(fn, rounds=3, warmup_rounds=0)
     assert len(result) == expected
     if not _memory_disabled(request):
-        measure_memory(f"large-stream-dataclass-slots-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-stream-dataclass-slots-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_pydantic_dataclass(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_pydantic_dataclass(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -284,12 +306,16 @@ def test_large_pydantic_dataclass(benchmark, shape: PayloadShape, request: pytes
     result = benchmark.pedantic(fn, rounds=3, warmup_rounds=0)
     assert len(result) == expected
     if not _memory_disabled(request):
-        measure_memory(f"large-pydantic-dataclass-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-pydantic-dataclass-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPES)
-def test_large_pydantic_dataclass_slots(benchmark, shape: PayloadShape, request: pytest.FixtureRequest) -> None:
+def test_large_pydantic_dataclass_slots(
+    benchmark, shape: PayloadShape, request: pytest.FixtureRequest
+) -> None:
     benchmark.group = f"large-parse-{shape}"
     data = _get_large_payload(shape)
     expected = LARGE_RECORD_COUNTS[shape]
@@ -300,7 +326,9 @@ def test_large_pydantic_dataclass_slots(benchmark, shape: PayloadShape, request:
     result = benchmark.pedantic(fn, rounds=3, warmup_rounds=0)
     assert len(result) == expected
     if not _memory_disabled(request):
-        measure_memory(f"large-pydantic-dataclass-slots-{shape}", fn, rounds=1, group=f"large-parse-{shape}")
+        measure_memory(
+            f"large-pydantic-dataclass-slots-{shape}", fn, rounds=1, group=f"large-parse-{shape}"
+        )
 
 
 @pytest.mark.large_payload

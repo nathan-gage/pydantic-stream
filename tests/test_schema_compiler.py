@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
+
 from pydantic_stream import ObjectSpec, StreamingProjectionError
 from pydantic_stream._schema import (
     _config_flags,

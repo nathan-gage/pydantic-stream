@@ -76,7 +76,9 @@ Streaming: 200 records
 # When you already have all the JSONL in memory, this projects every line
 # at once and returns a list.
 
-jsonl_blob = b"\n".join(json.dumps(make_record(i), separators=(",", ":")).encode() for i in range(200))
+jsonl_blob = b"\n".join(
+    json.dumps(make_record(i), separators=(",", ":")).encode() for i in range(200)
+)
 
 results = Contract.stream_model_validate_jsonl(jsonl_blob)
 

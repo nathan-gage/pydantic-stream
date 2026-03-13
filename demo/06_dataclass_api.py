@@ -19,6 +19,7 @@ import string
 from typing import Literal
 
 from pydantic.dataclasses import dataclass as pydantic_dataclass
+
 from pydantic_stream import StreamingDataclassMixin
 
 
@@ -84,7 +85,9 @@ print(f"Chunked:   {count} records streamed")
 
 # -- JSONL ------------------------------------------------------------------
 
-jsonl = b"\n".join(json.dumps(make_record(i, extra=10), separators=(",", ":")).encode() for i in range(50))
+jsonl = b"\n".join(
+    json.dumps(make_record(i, extra=10), separators=(",", ":")).encode() for i in range(50)
+)
 results = Contract.stream_validate_jsonl(jsonl)
 print(f"JSONL:     {len(results)} records")
 """JSONL:     50 records"""

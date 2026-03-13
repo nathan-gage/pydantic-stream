@@ -6,6 +6,7 @@ root_prefix navigation, JSONL, and the projection-free TypeAdapter path.
 
     uv run --with aiohttp python demo/http_streaming.py
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +24,6 @@ from pydantic import TypeAdapter
 
 from pydantic_stream import (
     StreamingBaseModelMixin,
-    compile_model_spec,
     project_array_items_partial,
     stream_json_array,
 )
@@ -58,7 +58,9 @@ def _make_record(i: int) -> dict[str, Any]:
         "timestamp": f"2026-03-13T{i % 24:02d}:{i % 60:02d}:00Z",
         "user_id": random.randint(1, 50_000),
         "action": random.choice(ACTIONS),
-        "tags": random.sample(["web", "mobile", "api", "internal", "beta", "prod"], k=random.randint(1, 4)),
+        "tags": random.sample(
+            ["web", "mobile", "api", "internal", "beta", "prod"], k=random.randint(1, 4)
+        ),
     }
     # ~8 noise fields to make projection dramatic
     rec["_trace_id"] = str(uuid.uuid4())
@@ -66,7 +68,7 @@ def _make_record(i: int) -> dict[str, Any]:
     rec["_metadata"] = {
         "browser": "".join(random.choices(CHARSET, k=60)),
         "os": "".join(random.choices(CHARSET, k=40)),
-        "ip": f"{random.randint(1,255)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(0,255)}",
+        "ip": f"{random.randint(1, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}",
         "geo": {"lat": random.uniform(-90, 90), "lon": random.uniform(-180, 180)},
     }
     rec["_feature_vector"] = [random.random() for _ in range(64)]
@@ -76,7 +78,9 @@ def _make_record(i: int) -> dict[str, Any]:
         for j in range(5)
     ]
     rec["_previous_actions"] = [random.choice(ACTIONS) for _ in range(20)]
-    rec["_ab_groups"] = {f"exp_{j}": random.choice(["control", "variant_a", "variant_b"]) for j in range(10)}
+    rec["_ab_groups"] = {
+        f"exp_{j}": random.choice(["control", "variant_a", "variant_b"]) for j in range(10)
+    }
     return rec
 
 
@@ -216,7 +220,9 @@ async def approach_2_chunked_streaming(session: aiohttp.ClientSession) -> None:
                 break
 
     elapsed_ms = (time.perf_counter() - t0) * 1000
-    print(f"  Streamed {count:,} events in {elapsed_ms:.0f} ms (chunk_size={CHUNK_SIZE // 1024} KB)")
+    print(
+        f"  Streamed {count:,} events in {elapsed_ms:.0f} ms (chunk_size={CHUNK_SIZE // 1024} KB)"
+    )
     print(f"  Peak buffer ≈ {CHUNK_SIZE // 1024} KB (bounded by chunk_size)")
     print(f"  first: {first}")
     print(f"  last:  {last}")
@@ -235,7 +241,7 @@ async def approach_3_nested_root_prefix(session: aiohttp.ClientSession) -> None:
     project_ms = (time.perf_counter() - t1) * 1000
 
     print(f"  Downloaded {len(data) / 1e6:.1f} MB in {download_ms:.0f} ms")
-    print(f'  root_prefix="data.results" navigates {{"data": {{"results": [...]}}}}')
+    print('  root_prefix="data.results" navigates {"data": {"results": [...]}}')
     print(f"  StreamArray created in {project_ms:.1f} ms")
     print(f"  arr[0]    = {arr[0]}")
     print(f"  arr[9999] = {arr[9999]}")
@@ -303,7 +309,7 @@ async def approach_5_no_projection(session: aiohttp.ClientSession) -> None:
         count += 1
     elapsed_ms = (time.perf_counter() - t0) * 1000
 
-    print(f"  stream_json_array (no projection, pydantic drops extras)")
+    print("  stream_json_array (no projection, pydantic drops extras)")
     print(f"  {count:,} events in {elapsed_ms:.0f} ms")
     print(f"  first: {first}")
     print(f"  last:  {last}")

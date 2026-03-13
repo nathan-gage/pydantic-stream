@@ -26,7 +26,9 @@ RESERVED_RICH_KEYS = frozenset(
 
 def identifier_keys(forbidden: Collection[str] = ()) -> st.SearchStrategy[str]:
     reserved = frozenset(forbidden)
-    return st.from_regex(r"[a-z_][a-z0-9_]{0,10}", fullmatch=True).filter(lambda key: key not in reserved)
+    return st.from_regex(r"[a-z_][a-z0-9_]{0,10}", fullmatch=True).filter(
+        lambda key: key not in reserved
+    )
 
 
 def json_scalars() -> st.SearchStrategy[Any]:
@@ -88,7 +90,9 @@ def user_payloads(
         payload["address"] = draw(
             st.one_of(
                 st.none(),
-                address_payloads(include_unknown=include_unknown, allow_field_name=allow_address_by_name),
+                address_payloads(
+                    include_unknown=include_unknown, allow_field_name=allow_address_by_name
+                ),
             )
         )
 
@@ -123,7 +127,9 @@ def alias_choice_payloads(
 ) -> dict[str, Any]:
     payload = {
         "label": draw(st.text(min_size=1, max_size=24)),
-        draw(st.sampled_from(["external_id", "legacy_id"])): draw(st.integers(min_value=0, max_value=10_000)),
+        draw(st.sampled_from(["external_id", "legacy_id"])): draw(
+            st.integers(min_value=0, max_value=10_000)
+        ),
     }
     if include_unknown:
         payload.update(draw(json_objects(payload.keys() | RESERVED_ALIAS_CHOICE_KEYS)))
@@ -138,7 +144,9 @@ def populate_by_name_payloads(
 ) -> dict[str, Any]:
     payload = {
         "city": draw(st.text(min_size=1, max_size=20)),
-        draw(st.sampled_from(["zip", "zip_code"])): draw(st.integers(min_value=0, max_value=99_999)),
+        draw(st.sampled_from(["zip", "zip_code"])): draw(
+            st.integers(min_value=0, max_value=99_999)
+        ),
     }
     if include_unknown:
         payload.update(draw(json_objects(payload.keys() | RESERVED_ADDRESS_KEYS)))
@@ -158,7 +166,9 @@ def rich_model_payloads(
     }
 
     if draw(st.booleans()):
-        payload["score"] = draw(st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False))
+        payload["score"] = draw(
+            st.floats(min_value=-1e6, max_value=1e6, allow_nan=False, allow_infinity=False)
+        )
 
     if draw(st.booleans()):
         payload["created_at"] = draw(

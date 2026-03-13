@@ -1,71 +1,76 @@
-"""Smoke tests proving the shared streamable harness is ready for expansion."""
+"""Usage-oriented smoke tests that show the public streaming API directly."""
 
 from __future__ import annotations
 
-from hypothesis import example, given, settings
+import io
 
-from .assertions import (
-    assert_json_array_matches_direct,
-    assert_jsonl_matches_direct,
-    assert_single_matches_direct,
-)
-from .cases import StreamableCase
-from .strategies import (
-    alias_choice_payloads,
-    populate_by_name_payloads,
-    user_payload_lists,
-)
+from pydantic_stream import StreamArray
 
+from .cases import HarnessUserDataclass, HarnessUserModel, json_bytes, json_source, jsonl_bytes
 
-def test_user_case_sample_payloads_match_direct_validation(user_case: StreamableCase) -> None:
-    payloads = [
-        {
-            "id": 1,
-            "name": "Ada",
-            "address": {"city": "NYC", "zip": 10001, "junk": {"nested": [1, 2, 3]}},
-            "tags": ["engineer"],
-            "metadata": {"keep": True},
-            "ignore_me": {"huge": [1, 2, 3]},
-        },
-        {
-            "id": "2",
-            "name": "Grace",
-        },
-    ]
-
-    assert_json_array_matches_direct(user_case, payloads)
-    assert_jsonl_matches_direct(user_case, payloads)
+PAYLOADS = [
+    {
+        "id": 1,
+        "name": "Ada",
+        "address": {"city": "NYC", "zip": 10001, "junk": {"nested": [1, 2, 3]}},
+        "ignore_me": {"huge": [1, 2, 3]},
+    },
+    {
+        "id": "2",
+        "name": "Grace",
+    },
+]
 
 
-@given(payloads=user_payload_lists())
-@settings(max_examples=25)
-@example(payloads=[])
-@example(payloads=[{"id": 1, "name": "a"}])
-def test_user_case_property_array_matches_direct_validation(
-    user_case: StreamableCase,
-    payloads: list[dict[str, object]],
-) -> None:
-    assert_json_array_matches_direct(user_case, payloads)
-    assert_jsonl_matches_direct(user_case, payloads)
+def test_basemodel_usage_example_covers_all_streaming_entry_points() -> None:
+    single = HarnessUserModel.stream_model_validate_json(json_source(PAYLOADS[0]))
+    array = HarnessUserModel.stream_model_validate_json_array(json_source(PAYLOADS))
+    array_iter = list(
+        HarnessUserModel.stream_model_validate_json_array_iter(
+            io.BytesIO(json_bytes(PAYLOADS)), chunk_size=16
+        )
+    )
+    jsonl_iter = list(
+        HarnessUserModel.stream_model_validate_jsonl_iter(io.BytesIO(jsonl_bytes(PAYLOADS)))
+    )
+
+    assert single.id == 1
+    assert single.address is not None
+    assert single.address.city == "NYC"
+    assert isinstance(array, StreamArray)
+    assert [item.id for item in array] == [1, 2]
+    assert [item.id for item in array.to_list()] == [1, 2]
+    assert [item.name for item in array_iter] == ["Ada", "Grace"]
+    assert [item.name for item in jsonl_iter] == ["Ada", "Grace"]
 
 
-@given(payload=alias_choice_payloads(include_unknown=True))
-@settings(max_examples=25)
-@example(payload={"label": "x", "external_id": 1})
-@example(payload={"label": "x", "legacy_id": 2})
-def test_alias_choice_case_property_matches_direct_validation(
-    alias_choice_case: StreamableCase,
-    payload: dict[str, object],
-) -> None:
-    assert_single_matches_direct(alias_choice_case, payload)
+def test_dataclass_usage_example_covers_all_streaming_entry_points() -> None:
+    single = HarnessUserDataclass.stream_validate_json(json_source(PAYLOADS[0]))
+    array = HarnessUserDataclass.stream_validate_json_array(json_source(PAYLOADS))
+    array_iter = list(
+        HarnessUserDataclass.stream_validate_json_array_iter(
+            io.BytesIO(json_bytes(PAYLOADS)), chunk_size=16
+        )
+    )
+    jsonl_iter = list(
+        HarnessUserDataclass.stream_validate_jsonl_iter(io.BytesIO(jsonl_bytes(PAYLOADS)))
+    )
+
+    assert single.id == 1
+    assert single.address is not None
+    assert single.address.city == "NYC"
+    assert isinstance(array, StreamArray)
+    assert [item.id for item in array] == [1, 2]
+    assert [item.id for item in array.to_list()] == [1, 2]
+    assert [item.name for item in array_iter] == ["Ada", "Grace"]
+    assert [item.name for item in jsonl_iter] == ["Ada", "Grace"]
 
 
-@given(payload=populate_by_name_payloads(include_unknown=True))
-@settings(max_examples=25)
-@example(payload={"city": "NYC", "zip": 10001})
-@example(payload={"city": "NYC", "zip_code": 10001})
-def test_populate_by_name_case_property_matches_direct_validation(
-    populate_by_name_case: StreamableCase,
-    payload: dict[str, object],
-) -> None:
-    assert_single_matches_direct(populate_by_name_case, payload)
+def test_array_usage_example_supports_root_prefix() -> None:
+    data = {"items": PAYLOADS}
+
+    result = HarnessUserModel.stream_model_validate_json_array(
+        json_bytes(data), root_prefix="items"
+    )
+
+    assert [item.id for item in result[0:2]] == [1, 2]

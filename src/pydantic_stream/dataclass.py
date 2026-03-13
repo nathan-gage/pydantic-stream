@@ -15,7 +15,7 @@ from ._native import (
     project_object,
 )
 from ._schema import compile_object_spec
-from .base_model import _is_eager_source, _to_bytes, _to_bytes_jsonl
+from .base_model import _has_trailing_array_content, _is_eager_source, _to_bytes, _to_bytes_jsonl
 from .stream_array import StreamArray
 
 Streamable = TypeVar("Streamable", bound="StreamingDataclassMixin")
@@ -111,10 +111,12 @@ class StreamingDataclassMixin:
 
         buffer = bytearray()
         is_start = True
+        saw_input = False
 
         for chunk in chunks:
             if not chunk:
-                break
+                continue
+            saw_input = True
             buffer.extend(chunk)
             items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
             for item_bytes in items:
@@ -122,17 +124,23 @@ class StreamingDataclassMixin:
             del buffer[:consumed]
             is_start = False
             if finished:
+                if _has_trailing_array_content(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
                 return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
 
         # Drain remaining buffer
         if buffer:
             items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
             for item_bytes in items:
                 yield adapter.validate_json(item_bytes)
+            del buffer[:consumed]
             if not finished:
-                remaining = bytes(buffer[consumed:]).strip()
-                if remaining:
-                    raise StreamingProjectionError("Unexpected end of JSON array")
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if bytes(buffer).strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
     def stream_validate_jsonl_iter(

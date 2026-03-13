@@ -9,6 +9,7 @@ import dataclasses
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
+
 from pydantic_stream import StreamingBaseModelMixin, StreamingDataclassMixin
 
 # ---------------------------------------------------------------------------
@@ -99,7 +100,9 @@ class BenchUser_PydanticModel(BaseModel):
     tags: list[str]
 
 
-pydantic_model_list_adapter: TypeAdapter[list[BenchUser_PydanticModel]] = TypeAdapter(list[BenchUser_PydanticModel])
+pydantic_model_list_adapter: TypeAdapter[list[BenchUser_PydanticModel]] = TypeAdapter(
+    list[BenchUser_PydanticModel]
+)
 
 
 # ---------------------------------------------------------------------------
@@ -126,7 +129,9 @@ class BenchUser_PydanticDC:
 rebuild_dataclass(BenchAddress_PydanticDC)  # type: ignore[arg-type]
 rebuild_dataclass(BenchUser_PydanticDC)  # type: ignore[arg-type]
 
-pydantic_dc_list_adapter: TypeAdapter[list[BenchUser_PydanticDC]] = TypeAdapter(list[BenchUser_PydanticDC])
+pydantic_dc_list_adapter: TypeAdapter[list[BenchUser_PydanticDC]] = TypeAdapter(
+    list[BenchUser_PydanticDC]
+)
 
 
 # ---------------------------------------------------------------------------

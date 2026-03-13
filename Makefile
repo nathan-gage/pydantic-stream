@@ -1,3 +1,5 @@
+PYTHON_SOURCES := src/ tests/ demo/ benchmarks/
+
 .PHONY: dev test bench bench-large lint fmt check
 
 dev:
@@ -21,11 +23,11 @@ bench-large:
 lint:
 	cargo clippy --workspace -- -D warnings
 	cargo fmt --check
-	uv run ruff check src/
+	uv run ruff check $(PYTHON_SOURCES)
 
 fmt:
 	cargo fmt
-	uv run ruff check --fix src/
-	uv run ruff format src/
+	uv run ruff check --fix $(PYTHON_SOURCES)
+	uv run ruff format $(PYTHON_SOURCES)
 
 check: lint test

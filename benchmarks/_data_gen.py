@@ -81,7 +81,8 @@ def _default_unknown() -> dict:
     return {
         "_analytics_blob": {
             "raw_events": [
-                {"ts": f"2025-01-{(j % 28) + 1:02d}T12:00:00Z", "value": _random_string(200)} for j in range(50)
+                {"ts": f"2025-01-{(j % 28) + 1:02d}T12:00:00Z", "value": _random_string(200)}
+                for j in range(50)
             ],
             "summary": {
                 "counts": list(range(200)),
@@ -91,7 +92,10 @@ def _default_unknown() -> dict:
         "_audit_trail": [_random_string(200) for _ in range(20)],
         "_embedding_vector": [round(random.gauss(0, 1), 6) for _ in range(128)],
         "_raw_response_cache": {
-            f"level1_{a}": {f"level2_{b}": {f"level3_{c}": _random_string(100) for c in range(5)} for b in range(5)}
+            f"level1_{a}": {
+                f"level2_{b}": {f"level3_{c}": _random_string(100) for c in range(5)}
+                for b in range(5)
+            }
             for a in range(3)
         },
     }
@@ -207,7 +211,7 @@ def _tile_large_payload(shape: PayloadShape, count: int) -> bytes:
     for i in range(count):
         if i:
             parts.append(sep)
-        prefix = f'{{"id":{i},"name":"user_{i}",'.encode("utf-8")
+        prefix = f'{{"id":{i},"name":"user_{i}",'.encode()
         parts.append(prefix)
         parts.append(templates[i % pool_size])
     parts.append(b"]")

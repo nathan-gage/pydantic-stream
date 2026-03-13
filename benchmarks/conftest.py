@@ -20,15 +20,15 @@ import gc
 import os
 import statistics
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 import memray
 import pytest
 from memray import FileReader
 
 from ._data_gen import SHAPES, PayloadShape
-
 
 # ---------------------------------------------------------------------------
 # pytest hooks — CLI flags for benchmark shapes
@@ -72,7 +72,9 @@ def _resolve_shapes(raw: list[str]) -> list[PayloadShape]:
         if normed in SHAPES:
             resolved.append(normed)  # type: ignore[arg-type]
         else:
-            raise pytest.UsageError(f"Unknown --payload-shape {v!r}. Choose from: {', '.join(SHAPES)}, all")
+            raise pytest.UsageError(
+                f"Unknown --payload-shape {v!r}. Choose from: {', '.join(SHAPES)}, all"
+            )
     return resolved
 
 
@@ -92,10 +94,13 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if hasattr(item, "callspec") and "shape" in item.callspec.params:
             shape = item.callspec.params["shape"]
             if shape not in enabled_shapes:
-                item.add_marker(pytest.mark.skip(reason=f"shape {shape!r} not in --payload-shape selection"))
+                item.add_marker(
+                    pytest.mark.skip(reason=f"shape {shape!r} not in --payload-shape selection")
+                )
 
     # Deterministic ordering: sort by node ID so test names are always consistent.
     items.sort(key=lambda item: item.nodeid)
+
 
 MEMORY_ROUNDS = int(os.environ.get("MEMORY_ROUNDS", "5"))
 
@@ -151,7 +156,9 @@ class MemoryStats:
             q = statistics.quantiles(self.samples, n=4)
             q1, q3 = q[0], q[2]
             iqr = q3 - q1
-            iqr_out = sum(1 for s in self.samples if iqr > 0 and (s < q1 - 1.5 * iqr or s > q3 + 1.5 * iqr))
+            iqr_out = sum(
+                1 for s in self.samples if iqr > 0 and (s < q1 - 1.5 * iqr or s > q3 + 1.5 * iqr)
+            )
         else:
             iqr_out = 0
         return std_out, iqr_out
@@ -206,7 +213,9 @@ def _measure_result_size(fn: Callable[[], Any]) -> int:
         _cleanup_tmp(tmp_dir, path)
 
 
-def measure_memory(name: str, fn: Callable[[], Any], rounds: int = MEMORY_ROUNDS, group: str = "memory") -> None:
+def measure_memory(
+    name: str, fn: Callable[[], Any], rounds: int = MEMORY_ROUNDS, group: str = "memory"
+) -> None:
     """Run *fn* under memray *rounds* times and record peak memory + result size."""
     stats = MemoryStats(name=name, group=group)
     for _ in range(rounds):

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from .cases import StreamableCase, json_bytes, json_source, jsonl_bytes, jsonl_source
 

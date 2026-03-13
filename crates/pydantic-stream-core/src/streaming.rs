@@ -195,6 +195,17 @@ pub fn trim_ascii(s: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
 
+    fn span_ranges(items: &[ByteSpan]) -> Vec<(usize, usize)> {
+        items.iter().map(|span| (span.start, span.end)).collect()
+    }
+
+    fn span_bytes<'a>(input: &'a [u8], items: &[ByteSpan]) -> Vec<&'a [u8]> {
+        items
+            .iter()
+            .map(|span| &input[span.start..span.end])
+            .collect()
+    }
+
     #[test]
     fn extract_empty_array() {
         let result = extract_array_items(b"[]", true).unwrap();
@@ -207,29 +218,43 @@ mod tests {
     fn extract_single_object() {
         let input = b"[{\"x\":1}]";
         let result = extract_array_items(input, true).unwrap();
-        assert_eq!(result.items.len(), 1);
+        assert_eq!(span_ranges(&result.items), vec![(1, 8)]);
         assert!(result.finished);
-        let span = &result.items[0];
-        assert_eq!(&input[span.start..span.end], b"{\"x\":1}");
+        assert_eq!(result.consumed, input.len());
+        assert_eq!(
+            span_bytes(input, &result.items),
+            vec![b"{\"x\":1}".as_slice()]
+        );
     }
 
     #[test]
     fn extract_multiple_objects() {
         let input = b"[{\"x\":1},{\"x\":2},{\"x\":3}]";
         let result = extract_array_items(input, true).unwrap();
-        assert_eq!(result.items.len(), 3);
+        assert_eq!(span_ranges(&result.items), vec![(1, 8), (9, 16), (17, 24)]);
         assert!(result.finished);
+        assert_eq!(result.consumed, input.len());
+        assert_eq!(
+            span_bytes(input, &result.items),
+            vec![
+                b"{\"x\":1}".as_slice(),
+                b"{\"x\":2}".as_slice(),
+                b"{\"x\":3}".as_slice(),
+            ]
+        );
     }
 
     #[test]
     fn extract_partial_object() {
         let input = b"[{\"x\":1},{\"x\":";
         let result = extract_array_items(input, true).unwrap();
-        assert_eq!(result.items.len(), 1);
+        assert_eq!(span_ranges(&result.items), vec![(1, 8)]);
         assert!(!result.finished);
-        // consumed should be at the start of the incomplete object
-        let span = &result.items[0];
-        assert_eq!(&input[span.start..span.end], b"{\"x\":1}");
+        assert_eq!(result.consumed, 9);
+        assert_eq!(
+            span_bytes(input, &result.items),
+            vec![b"{\"x\":1}".as_slice()]
+        );
     }
 
     #[test]
@@ -237,8 +262,34 @@ mod tests {
         // Simulate a continuation (no leading '[')
         let input = b"{\"x\":2},{\"x\":3}]";
         let result = extract_array_items(input, false).unwrap();
-        assert_eq!(result.items.len(), 2);
+        assert_eq!(span_ranges(&result.items), vec![(0, 7), (8, 15)]);
         assert!(result.finished);
+        assert_eq!(result.consumed, input.len());
+        assert_eq!(
+            span_bytes(input, &result.items),
+            vec![b"{\"x\":2}".as_slice(), b"{\"x\":3}".as_slice()]
+        );
+    }
+
+    #[test]
+    fn extract_two_chunk_handoff_uses_consumed_offset() {
+        let first_chunk = b"[{\"x\":1},{\"x\":2";
+        let first = extract_array_items(first_chunk, true).unwrap();
+        assert_eq!(span_ranges(&first.items), vec![(1, 8)]);
+        assert_eq!(first.consumed, 9);
+        assert!(!first.finished);
+
+        let mut continuation = first_chunk[first.consumed..].to_vec();
+        continuation.extend_from_slice(br#"},{"x":3}]"#);
+
+        let second = extract_array_items(&continuation, false).unwrap();
+        assert_eq!(span_ranges(&second.items), vec![(0, 7), (8, 15)]);
+        assert_eq!(second.consumed, continuation.len());
+        assert!(second.finished);
+        assert_eq!(
+            span_bytes(&continuation, &second.items),
+            vec![b"{\"x\":2}".as_slice(), b"{\"x\":3}".as_slice()]
+        );
     }
 
     #[test]
@@ -254,20 +305,67 @@ mod tests {
         // streaming.rs is type-agnostic — it works with any JSON value
         let input = b"[1,\"hello\",true,null]";
         let result = extract_array_items(input, true).unwrap();
-        assert_eq!(result.items.len(), 4);
-        assert!(result.finished);
-        assert_eq!(&input[result.items[0].start..result.items[0].end], b"1");
         assert_eq!(
-            &input[result.items[1].start..result.items[1].end],
-            b"\"hello\""
+            span_ranges(&result.items),
+            vec![(1, 2), (3, 10), (11, 15), (16, 20)]
         );
-        assert_eq!(&input[result.items[2].start..result.items[2].end], b"true");
-        assert_eq!(&input[result.items[3].start..result.items[3].end], b"null");
+        assert!(result.finished);
+        assert_eq!(
+            span_bytes(input, &result.items),
+            vec![
+                b"1".as_slice(),
+                b"\"hello\"".as_slice(),
+                b"true".as_slice(),
+                b"null".as_slice(),
+            ]
+        );
+        assert_eq!(result.consumed, input.len());
     }
 
     #[test]
     fn extract_not_array_error() {
         let err = extract_array_items(b"{\"x\":1}", true).unwrap_err();
         assert!(err.message.contains("Expected '['"));
+    }
+
+    #[test]
+    fn navigate_to_prefix_positions_parser_at_nested_value() {
+        let input = br#"{"meta":0,"outer":{"items":[{"x":1}]}}"#;
+        let mut jiter = Jiter::new(input);
+
+        navigate_to_prefix(&mut jiter, &["outer", "items"]).unwrap();
+
+        assert_eq!(jiter.peek().unwrap(), Peek::Array);
+        assert_eq!(jiter.known_array().unwrap(), Some(Peek::Object));
+    }
+
+    #[test]
+    fn navigate_to_prefix_reports_missing_key() {
+        let input = br#"{"outer":{"present":[]}}"#;
+        let mut jiter = Jiter::new(input);
+
+        let err = navigate_to_prefix(&mut jiter, &["outer", "missing"]).unwrap_err();
+
+        assert!(err.message.contains("Prefix key"));
+        assert!(err.message.contains("missing"));
+    }
+
+    #[test]
+    fn navigate_to_prefix_reports_non_object_segment() {
+        let input = br#"{"outer":[1,2,3]}"#;
+        let mut jiter = Jiter::new(input);
+
+        let err = navigate_to_prefix(&mut jiter, &["outer", "items"]).unwrap_err();
+
+        assert!(err
+            .message
+            .contains("Expected a JSON object at prefix segment"));
+        assert!(err.message.contains("items"));
+    }
+
+    #[test]
+    fn trim_ascii_trims_edges_and_all_whitespace() {
+        assert_eq!(trim_ascii(b" \n\t{\"x\":1}\r "), b"{\"x\":1}");
+        assert_eq!(trim_ascii(b" \n\t\r "), b"");
     }
 }

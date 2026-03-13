@@ -11,6 +11,7 @@ from pydantic import ConfigDict, model_validator
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
 from pydantic_core import ValidationError
+
 from pydantic_stream import (
     FieldSpec,
     ObjectSpec,
@@ -67,30 +68,34 @@ class TestProjectObjectErrors:
 
 
 # ---------------------------------------------------------------------------
-# Validation error wrapping in array/jsonl iterators
+# Validation error behavior in array/jsonl iterators
 # ---------------------------------------------------------------------------
 
 
-class TestValidationErrorWrapping:
-    def test_array_iter_wraps_validation_error_with_item_index_basemodel(self) -> None:
+class TestValidationErrorBehavior:
+    def test_array_iter_propagates_field_validation_error_basemodel(self) -> None:
         payload = [{"id": 1, "name": "Ada"}, {"id": "not-an-int", "name": "Grace"}]
         source = json_source(payload)
         stream_array = HarnessUserModel.stream_model_validate_json_array(source)
         it = iter(stream_array)
         first = next(it)
         assert first.id == 1
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             next(it)
+        assert exc_info.value.errors(include_url=False)[0]["loc"] == ("id",)
+        assert exc_info.value.errors(include_url=False)[0]["type"] == "int_parsing"
 
-    def test_array_iter_wraps_validation_error_with_item_index_dataclass(self) -> None:
+    def test_array_iter_propagates_field_validation_error_dataclass(self) -> None:
         payload = [{"id": 1, "name": "Ada"}, {"id": "not-an-int", "name": "Grace"}]
         source = json_source(payload)
         stream_array = HarnessUserDataclass.stream_validate_json_array(source)
         it = iter(stream_array)
         first = next(it)
         assert first.id == 1
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             next(it)
+        assert exc_info.value.errors(include_url=False)[0]["loc"] == ("id",)
+        assert exc_info.value.errors(include_url=False)[0]["type"] == "int_parsing"
 
     def test_jsonl_iter_wraps_validation_error_basemodel(self) -> None:
         payload = [{"id": 1, "name": "Ada"}, {"id": "not-an-int", "name": "Grace"}]
@@ -110,12 +115,14 @@ class TestValidationErrorWrapping:
         with pytest.raises(ValueError, match="Validation failed for item 1"):
             next(it)
 
-    def test_first_item_validation_error_is_item_0(self) -> None:
+    def test_first_array_item_validation_error_points_to_the_invalid_field(self) -> None:
         payload = [{"id": "bad", "name": "Ada"}]
         source = json_source(payload)
         stream_array = HarnessUserModel.stream_model_validate_json_array(source)
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             list(stream_array)
+        assert exc_info.value.errors(include_url=False)[0]["loc"] == ("id",)
+        assert exc_info.value.errors(include_url=False)[0]["type"] == "int_parsing"
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +279,7 @@ class TestModelValidator:
             y: int
 
             @model_validator(mode="after")
-            def check_sum(self) -> "ModelWithAfterValidator":
+            def check_sum(self) -> ModelWithAfterValidator:
                 if self.x + self.y > 100:
                     raise ValueError("sum too large")
                 return self
@@ -287,7 +294,7 @@ class TestModelValidator:
             y: int
 
             @model_validator(mode="after")
-            def check_sum(self) -> "ModelWithAfterValidator":
+            def check_sum(self) -> ModelWithAfterValidator:
                 if self.x + self.y > 100:
                     raise ValueError("sum too large")
                 return self
@@ -349,11 +356,15 @@ class TestSourceTypes:
         assert len(list(result)) == 1
 
     def test_str_source_for_jsonl(self) -> None:
-        result = HarnessUserModel.stream_model_validate_jsonl('{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}')
+        result = HarnessUserModel.stream_model_validate_jsonl(
+            '{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}'
+        )
         assert len(result) == 2
 
     def test_bytes_source_for_jsonl(self) -> None:
-        result = HarnessUserModel.stream_model_validate_jsonl(b'{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}')
+        result = HarnessUserModel.stream_model_validate_jsonl(
+            b'{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}'
+        )
         assert len(result) == 2
 
 

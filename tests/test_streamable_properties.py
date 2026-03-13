@@ -7,9 +7,14 @@ import json
 
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
+
 from pydantic_stream import FieldSpec, ObjectSpec, project_object
 
-from .assertions import assert_json_array_matches_direct, assert_jsonl_matches_direct, assert_single_matches_direct
+from .assertions import (
+    assert_json_array_matches_direct,
+    assert_jsonl_matches_direct,
+    assert_single_matches_direct,
+)
 from .cases import (
     RICH_BASEMODEL_CASE,
     RICH_DATACLASS_CASE,

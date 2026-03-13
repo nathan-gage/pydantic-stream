@@ -50,6 +50,8 @@ class StreamArray(Generic[T]):
                 raise IndexError("StreamArray does not support negative start index")
             if stop is not None and stop < 0:
                 raise IndexError("StreamArray does not support negative stop index")
+            if step is not None and step == 0:
+                raise ValueError("StreamArray slice step cannot be zero")
             if step is not None and step < 0:
                 raise IndexError("StreamArray does not support negative step")
             items = project_array_items_sliced(

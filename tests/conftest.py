@@ -12,6 +12,7 @@ from .cases import (
     ALIAS_CHOICE_CASES,
     ALL_CASES,
     POPULATE_BY_NAME_CASES,
+    RICH_CASES,
     USER_CASES,
     StreamableCase,
     reset_streaming_harness_caches,
@@ -64,4 +65,9 @@ def alias_choice_case(request: pytest.FixtureRequest) -> StreamableCase:
 
 @pytest.fixture(params=POPULATE_BY_NAME_CASES, ids=_case_id)
 def populate_by_name_case(request: pytest.FixtureRequest) -> StreamableCase:
+    return request.param
+
+
+@pytest.fixture(params=RICH_CASES, ids=_case_id)
+def rich_case(request: pytest.FixtureRequest) -> StreamableCase:
     return request.param

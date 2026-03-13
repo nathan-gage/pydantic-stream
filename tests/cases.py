@@ -5,13 +5,15 @@ from __future__ import annotations
 import enum
 import io
 import json
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Iterator, Literal, Sequence
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, TypeAdapter
 from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic.dataclasses import rebuild_dataclass
+
 from pydantic_stream import StreamingBaseModelMixin, StreamingDataclassMixin
 
 JsonObject = dict[str, Any]
@@ -35,7 +37,9 @@ def jsonl_source(records: Sequence[Any]) -> io.BytesIO:
     return io.BytesIO(jsonl_bytes(records))
 
 
-def iter_non_empty_jsonl_lines(source: str | bytes | Sequence[str] | Sequence[bytes]) -> Iterator[str | bytes]:
+def iter_non_empty_jsonl_lines(
+    source: str | bytes | Sequence[str] | Sequence[bytes],
+) -> Iterator[str | bytes]:
     if isinstance(source, str):
         raw_lines: Iterator[str | bytes] = iter(source.splitlines())
     elif isinstance(source, bytes):
@@ -55,6 +59,7 @@ class StreamableCase:
     model_type: type[Any]
     stream_validate_json_fn: Callable[[Any], Any]
     stream_validate_json_array_fn: Callable[[Any], Any]
+    stream_validate_json_array_iter_fn: Callable[[Any], Iterator[Any]]
     stream_validate_jsonl_iter_fn: Callable[[Any], Iterator[Any]]
     stream_validate_jsonl_fn: Callable[[Any], list[Any]]
 
@@ -66,17 +71,22 @@ class StreamableCase:
     def list_adapter(self) -> TypeAdapter[Any]:
         return TypeAdapter(list[self.model_type])
 
-    def stream_validate_json(self, source: Any) -> Any:
-        return self.stream_validate_json_fn(source)
+    def stream_validate_json(self, source: Any, *args: Any, **kwargs: Any) -> Any:
+        return self.stream_validate_json_fn(source, *args, **kwargs)
 
-    def stream_validate_json_array(self, source: Any) -> Any:
-        return self.stream_validate_json_array_fn(source)
+    def stream_validate_json_array(self, source: Any, *args: Any, **kwargs: Any) -> Any:
+        return self.stream_validate_json_array_fn(source, *args, **kwargs)
 
-    def stream_validate_jsonl_iter(self, source: Any) -> Iterator[Any]:
-        return self.stream_validate_jsonl_iter_fn(source)
+    def stream_validate_json_array_iter(
+        self, source: Any, *args: Any, **kwargs: Any
+    ) -> Iterator[Any]:
+        return self.stream_validate_json_array_iter_fn(source, *args, **kwargs)
 
-    def stream_validate_jsonl(self, source: Any) -> list[Any]:
-        return self.stream_validate_jsonl_fn(source)
+    def stream_validate_jsonl_iter(self, source: Any, *args: Any, **kwargs: Any) -> Iterator[Any]:
+        return self.stream_validate_jsonl_iter_fn(source, *args, **kwargs)
+
+    def stream_validate_jsonl(self, source: Any, *args: Any, **kwargs: Any) -> list[Any]:
+        return self.stream_validate_jsonl_fn(source, *args, **kwargs)
 
     def direct_validate_python(self, payload: Any) -> Any:
         return self.adapter.validate_python(payload)
@@ -194,6 +204,7 @@ USER_DATACLASS_CASE = StreamableCase(
     model_type=HarnessUserDataclass,
     stream_validate_json_fn=HarnessUserDataclass.stream_validate_json,
     stream_validate_json_array_fn=HarnessUserDataclass.stream_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessUserDataclass.stream_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessUserDataclass.stream_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessUserDataclass.stream_validate_jsonl,
 )
@@ -203,6 +214,7 @@ USER_BASEMODEL_CASE = StreamableCase(
     model_type=HarnessUserModel,
     stream_validate_json_fn=HarnessUserModel.stream_model_validate_json,
     stream_validate_json_array_fn=HarnessUserModel.stream_model_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessUserModel.stream_model_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessUserModel.stream_model_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessUserModel.stream_model_validate_jsonl,
 )
@@ -212,6 +224,7 @@ ALIAS_CHOICE_DATACLASS_CASE = StreamableCase(
     model_type=HarnessAliasChoiceDataclass,
     stream_validate_json_fn=HarnessAliasChoiceDataclass.stream_validate_json,
     stream_validate_json_array_fn=HarnessAliasChoiceDataclass.stream_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessAliasChoiceDataclass.stream_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessAliasChoiceDataclass.stream_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessAliasChoiceDataclass.stream_validate_jsonl,
 )
@@ -221,6 +234,7 @@ ALIAS_CHOICE_BASEMODEL_CASE = StreamableCase(
     model_type=HarnessAliasChoiceModel,
     stream_validate_json_fn=HarnessAliasChoiceModel.stream_model_validate_json,
     stream_validate_json_array_fn=HarnessAliasChoiceModel.stream_model_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessAliasChoiceModel.stream_model_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessAliasChoiceModel.stream_model_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessAliasChoiceModel.stream_model_validate_jsonl,
 )
@@ -230,6 +244,7 @@ POPULATE_BY_NAME_DATACLASS_CASE = StreamableCase(
     model_type=HarnessPopulateByNameDataclass,
     stream_validate_json_fn=HarnessPopulateByNameDataclass.stream_validate_json,
     stream_validate_json_array_fn=HarnessPopulateByNameDataclass.stream_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessPopulateByNameDataclass.stream_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessPopulateByNameDataclass.stream_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessPopulateByNameDataclass.stream_validate_jsonl,
 )
@@ -239,6 +254,7 @@ POPULATE_BY_NAME_BASEMODEL_CASE = StreamableCase(
     model_type=HarnessPopulateByNameModel,
     stream_validate_json_fn=HarnessPopulateByNameModel.stream_model_validate_json,
     stream_validate_json_array_fn=HarnessPopulateByNameModel.stream_model_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessPopulateByNameModel.stream_model_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessPopulateByNameModel.stream_model_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessPopulateByNameModel.stream_model_validate_jsonl,
 )
@@ -248,6 +264,7 @@ RICH_DATACLASS_CASE = StreamableCase(
     model_type=HarnessRichDataclass,
     stream_validate_json_fn=HarnessRichDataclass.stream_validate_json,
     stream_validate_json_array_fn=HarnessRichDataclass.stream_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessRichDataclass.stream_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessRichDataclass.stream_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessRichDataclass.stream_validate_jsonl,
 )
@@ -257,6 +274,7 @@ RICH_BASEMODEL_CASE = StreamableCase(
     model_type=HarnessRichModel,
     stream_validate_json_fn=HarnessRichModel.stream_model_validate_json,
     stream_validate_json_array_fn=HarnessRichModel.stream_model_validate_json_array,
+    stream_validate_json_array_iter_fn=HarnessRichModel.stream_model_validate_json_array_iter,
     stream_validate_jsonl_iter_fn=HarnessRichModel.stream_model_validate_jsonl_iter,
     stream_validate_jsonl_fn=HarnessRichModel.stream_model_validate_jsonl,
 )

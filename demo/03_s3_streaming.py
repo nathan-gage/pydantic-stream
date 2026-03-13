@@ -15,7 +15,8 @@ import json
 import random
 import string
 import time
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
 
 from pydantic_stream import StreamingBaseModelMixin
 

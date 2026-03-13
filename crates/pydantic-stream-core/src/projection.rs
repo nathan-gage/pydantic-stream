@@ -540,6 +540,10 @@ mod tests {
         serde_json::from_slice(bytes).unwrap()
     }
 
+    fn parse_items(items: &[Vec<u8>]) -> Vec<serde_json::Value> {
+        items.iter().map(|item| parse(item)).collect()
+    }
+
     // -- project_object tests --
 
     #[test]
@@ -571,6 +575,13 @@ mod tests {
         assert_eq!(parse(&out), serde_json::json!({"inner": {"a": 1}}));
     }
 
+    #[test]
+    fn project_object_rejects_non_object_input() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_object(b"[{\"x\":1}]", &s).unwrap_err();
+        assert!(err.message.contains("Expected a top-level JSON object"));
+    }
+
     // -- project_array tests --
 
     #[test]
@@ -579,6 +590,66 @@ mod tests {
         let out =
             project_array(b"[{\"x\":1,\"noise\":\"a\"},{\"x\":2,\"noise\":\"b\"}]", &s).unwrap();
         assert_eq!(parse(&out), serde_json::json!([{"x":1},{"x":2}]));
+    }
+
+    #[test]
+    fn project_array_rejects_non_object_items() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array(b"[{\"x\":1},2]", &s).unwrap_err();
+        assert!(err
+            .message
+            .contains("Expected array items to be JSON objects"));
+    }
+
+    // -- project_array_items tests --
+
+    #[test]
+    fn project_array_items_returns_projected_objects() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let out = project_array_items(b"[{\"x\":1,\"skip\":0},{\"x\":2,\"skip\":0}]", &s).unwrap();
+
+        assert_eq!(
+            parse_items(&out),
+            vec![serde_json::json!({"x": 1}), serde_json::json!({"x": 2})]
+        );
+    }
+
+    #[test]
+    fn project_array_items_rejects_non_array_input() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array_items(b"{\"x\":1}", &s).unwrap_err();
+        assert!(err.message.contains("Expected a top-level JSON array"));
+    }
+
+    // -- project_jsonl tests --
+
+    #[test]
+    fn project_jsonl_skips_blank_lines_and_crlf() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = b" \r\n{\"x\":1,\"skip\":0}\r\n\t{\"x\":2}\n";
+        let out = project_jsonl(input, &s).unwrap();
+
+        assert_eq!(
+            parse_items(&out),
+            vec![serde_json::json!({"x": 1}), serde_json::json!({"x": 2})]
+        );
+    }
+
+    #[test]
+    fn project_jsonl_reports_line_number_for_malformed_record() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_jsonl(b"{\"x\":1}\n{\"x\":\n", &s).unwrap_err();
+
+        assert!(err.message.contains("Invalid JSONL record on line 2"));
+    }
+
+    #[test]
+    fn project_jsonl_rejects_non_object_record() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_jsonl(b"{\"x\":1}\n[1]\n", &s).unwrap_err();
+
+        assert!(err.message.contains("Invalid JSONL record on line 2"));
+        assert!(err.message.contains("Expected a top-level JSON object"));
     }
 
     // -- project_array_items_sliced tests --
@@ -592,6 +663,57 @@ mod tests {
         assert_eq!(parse(&out[0]), serde_json::json!({"x": 1}));
     }
 
+    #[test]
+    fn sliced_respects_start_stop_and_step() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input =
+            b"{\"items\":[{\"x\":0},{\"x\":1},{\"x\":2},{\"x\":3},{\"x\":4}],\"tail\":true}";
+        let out = project_array_items_sliced(input, &s, &["items"], 1, Some(5), 2).unwrap();
+
+        assert_eq!(
+            parse_items(&out),
+            vec![serde_json::json!({"x": 1}), serde_json::json!({"x": 3})]
+        );
+    }
+
+    #[test]
+    fn sliced_rejects_non_object_selected_item() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array_items_sliced(b"[{\"x\":1},2]", &s, &[], 0, None, 1).unwrap_err();
+
+        assert!(err
+            .message
+            .contains("Expected array items to be JSON objects"));
+    }
+
+    // -- project_array_nav tests --
+
+    #[test]
+    fn project_array_nav_projects_prefixed_array() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = b"{\"data\":{\"items\":[{\"x\":1,\"skip\":0},{\"x\":2,\"skip\":0}],\"after\":true},\"meta\":0}";
+        let out = project_array_nav(input, &s, &["data", "items"]).unwrap();
+
+        assert_eq!(parse(&out), serde_json::json!([{"x": 1}, {"x": 2}]));
+    }
+
+    #[test]
+    fn project_array_nav_reports_missing_prefix_key() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array_nav(b"{\"data\":{}}", &s, &["data", "items"]).unwrap_err();
+
+        assert!(err.message.contains("Prefix key"));
+        assert!(err.message.contains("items"));
+    }
+
+    #[test]
+    fn project_array_nav_rejects_non_array_target() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array_nav(b"{\"items\":{\"x\":1}}", &s, &["items"]).unwrap_err();
+
+        assert!(err.message.contains("Expected a JSON array"));
+    }
+
     // -- project_array_items_partial tests --
 
     #[test]
@@ -599,10 +721,12 @@ mod tests {
         let s = mk_spec(&[("x", field("x"))]);
         let input = b"[{\"x\":1},{\"x\":2}]";
         let result = project_array_items_partial(input, &s, true).unwrap();
-        assert_eq!(result.items.len(), 2);
         assert!(result.finished);
-        assert_eq!(parse(&result.items[0]), serde_json::json!({"x": 1}));
-        assert_eq!(parse(&result.items[1]), serde_json::json!({"x": 2}));
+        assert_eq!(result.consumed, input.len());
+        assert_eq!(
+            parse_items(&result.items),
+            vec![serde_json::json!({"x": 1}), serde_json::json!({"x": 2})]
+        );
     }
 
     #[test]
@@ -610,8 +734,41 @@ mod tests {
         let s = mk_spec(&[("x", field("x"))]);
         let input = b"[{\"x\":1},{\"x\":";
         let result = project_array_items_partial(input, &s, true).unwrap();
-        assert_eq!(result.items.len(), 1);
         assert!(!result.finished);
-        assert_eq!(parse(&result.items[0]), serde_json::json!({"x": 1}));
+        assert_eq!(result.consumed, 9);
+        assert_eq!(
+            parse_items(&result.items),
+            vec![serde_json::json!({"x": 1})]
+        );
+    }
+
+    #[test]
+    fn partial_two_chunk_handoff_uses_consumed_offset() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let first_chunk = b"[{\"x\":1},{\"x\":2";
+        let first = project_array_items_partial(first_chunk, &s, true).unwrap();
+
+        assert_eq!(first.consumed, 9);
+        assert!(!first.finished);
+        assert_eq!(parse_items(&first.items), vec![serde_json::json!({"x": 1})]);
+
+        let mut continuation = first_chunk[first.consumed..].to_vec();
+        continuation.extend_from_slice(br#"},{"x":3}]"#);
+
+        let second = project_array_items_partial(&continuation, &s, false).unwrap();
+        assert_eq!(second.consumed, continuation.len());
+        assert!(second.finished);
+        assert_eq!(
+            parse_items(&second.items),
+            vec![serde_json::json!({"x": 2}), serde_json::json!({"x": 3})]
+        );
+    }
+
+    #[test]
+    fn partial_rejects_non_object_items() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let err = project_array_items_partial(b"[1]", &s, true).unwrap_err();
+
+        assert!(err.message.contains("Expected object in array"));
     }
 }
