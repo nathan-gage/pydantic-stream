@@ -412,7 +412,11 @@ fn project_object_inner<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
                                 remaining -= 1;
                             }
                             process_field::<EARLY_EXIT, FAST_SKIP>(
-                                jiter, input, output, field, &mut first_field,
+                                jiter,
+                                input,
+                                output,
+                                field,
+                                &mut first_field,
                             )?;
                         } else if FAST_SKIP {
                             // All known fields found.  Use the fast byte-scanner to
@@ -421,8 +425,7 @@ fn project_object_inner<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
                             // continue from the correct position.
                             // NLL: key not used here — jiter borrow released.
                             let abs_pos = jiter_abs_pos(jiter, input);
-                            let abs_end =
-                                fast_skip_to_object_end(input, abs_pos)?;
+                            let abs_end = fast_skip_to_object_end(input, abs_pos)?;
                             *jiter = Jiter::new(&input[abs_end..]);
                             break;
                         } else {
@@ -441,7 +444,11 @@ fn project_object_inner<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
                     Some(key) => {
                         let field = spec.fields.get(key);
                         process_field::<EARLY_EXIT, FAST_SKIP>(
-                            jiter, input, output, field, &mut first_field,
+                            jiter,
+                            input,
+                            output,
+                            field,
+                            &mut first_field,
                         )?;
                     }
                 }
@@ -479,7 +486,10 @@ fn process_field<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
                     }
                     output.extend_from_slice(&field_spec.encoded_key);
                     project_object_inner::<EARLY_EXIT, FAST_SKIP>(
-                        jiter, input, nested_spec, output,
+                        jiter,
+                        input,
+                        nested_spec,
+                        output,
                     )?;
                     *first_field = false;
                 } else {
@@ -542,6 +552,7 @@ fn jiter_abs_pos(jiter: &Jiter<'_>, input: &[u8]) -> usize {
 
 /// Skip a JSON string that has already had its opening `"` consumed.
 /// Returns the index immediately after the closing `"`.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn fast_skip_string(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
     loop {
@@ -580,6 +591,7 @@ const CONTAINER_STRUCTURAL: [u8; 256] = {
 /// Skip a JSON container (`{...}` or `[...]`) whose opening bracket has
 /// already been consumed.  `close` is the matching closing bracket.
 /// Returns the index immediately after the closing bracket.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn fast_skip_container(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
     // Depth starts at 1 (we are inside the opening bracket that has already
@@ -631,18 +643,15 @@ fn fast_skip_value(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
             index: pos,
         }),
         Some(&b'"') => fast_skip_string(data, pos + 1),
-        Some(&b'{') => fast_skip_container(data, pos + 1),
-        Some(&b'[') => fast_skip_container(data, pos + 1),
+        Some(&b'{' | &b'[') => fast_skip_container(data, pos + 1),
         Some(b't' | b'n') => Ok(pos + 4), // true / null (both 4 bytes)
-        Some(&b'f') => Ok(pos + 5),               // false
+        Some(&b'f') => Ok(pos + 5),       // false
         _ => {
             // Number: advance until a delimiter is found.
             let end = pos
                 + data[pos..]
                     .iter()
-                    .position(|&b| {
-                        matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r')
-                    })
+                    .position(|&b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'))
                     .unwrap_or(data.len() - pos);
             Ok(end)
         }
@@ -730,11 +739,7 @@ mod tests {
     }
 
     fn mk_spec(pairs: &[(&str, FieldSpec)]) -> ObjectSpec {
-        ObjectSpec::from_fields(
-            pairs
-                .iter()
-                .map(|(k, v)| (Box::from(*k), v.clone())),
-        )
+        ObjectSpec::from_fields(pairs.iter().map(|(k, v)| (Box::from(*k), v.clone())))
     }
 
     fn parse(bytes: &[u8]) -> serde_json::Value {
