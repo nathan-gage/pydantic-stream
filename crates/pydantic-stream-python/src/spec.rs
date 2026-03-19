@@ -16,10 +16,10 @@ impl PyFieldSpec {
     #[pyo3(signature = (output_key, nested=None))]
     fn new(output_key: String, nested: Option<PyObjectSpec>) -> Self {
         Self {
-            inner: spec::FieldSpec {
-                output_key: output_key.into_boxed_str(),
-                nested: nested.map(|s| Arc::clone(&s.inner)),
-            },
+            inner: spec::FieldSpec::new(
+                output_key.into_boxed_str(),
+                nested.map(|s| Arc::clone(&s.inner)),
+            ),
         }
     }
 
@@ -52,12 +52,13 @@ impl PyObjectSpec {
     /// Build from a `dict[str, FieldSpec]`.
     #[new]
     fn new(fields_by_input_key: HashMap<String, PyFieldSpec>) -> Self {
-        let fields: HashMap<Box<str>, spec::FieldSpec> = fields_by_input_key
-            .into_iter()
-            .map(|(k, v)| (k.into_boxed_str(), v.inner))
-            .collect();
+        let spec = spec::ObjectSpec::from_fields(
+            fields_by_input_key
+                .into_iter()
+                .map(|(k, v)| (k.into_boxed_str(), v.inner)),
+        );
         Self {
-            inner: Arc::new(spec::ObjectSpec { fields }),
+            inner: Arc::new(spec),
         }
     }
 

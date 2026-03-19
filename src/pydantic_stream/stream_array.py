@@ -4,8 +4,9 @@ from collections.abc import Iterator
 from typing import Generic, TypeVar, overload
 
 from pydantic import TypeAdapter
+from pydantic_core import ValidationError
 
-from ._native import ObjectSpec, project_array_items_sliced, project_array_nav
+from ._native import ObjectSpec, extract_array_items, project_array_items_sliced, project_array_nav
 
 T = TypeVar("T")
 
@@ -33,9 +34,22 @@ class StreamArray(Generic[T]):
         self._prefix = root_prefix
 
     def __iter__(self) -> Iterator[T]:
-        items = project_array_items_sliced(self._data, self._spec, self._prefix, 0, None, 1)
-        for item_bytes in items:
-            yield self._adapter.validate_json(item_bytes)
+        # Fast path: project the entire array into one compact blob (single Rust
+        # allocation), then validate everything in one pydantic-core call.
+        # For the common case of valid data this avoids N per-item Vec<u8>
+        # allocations and N separate validate_json calls.
+        blob = project_array_nav(self._data, self._spec, self._prefix)
+        try:
+            yield from self._list_adapter.validate_json(blob)
+        except ValidationError:
+            # Slow path: re-validate item-by-item from the projected blob so
+            # that ValidationError.loc contains ("field",) not (index, "field").
+            # This also preserves "yield valid items up to the first error"
+            # semantics that per-item validation gives.
+            items, _, _ = extract_array_items(blob, is_start=True)
+            validate = self._adapter.validate_json
+            for item_bytes in items:
+                yield validate(item_bytes)
 
     @overload
     def __getitem__(self, index: int) -> T: ...

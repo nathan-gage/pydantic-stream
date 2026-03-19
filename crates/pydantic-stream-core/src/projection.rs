@@ -1,4 +1,5 @@
-use jiter::{Jiter, JiterError, Peek};
+use jiter::{Jiter, JiterError, JiterErrorType, JsonErrorType, Peek};
+use memchr::memchr2;
 
 use crate::error::StreamError;
 use crate::spec::ObjectSpec;
@@ -15,7 +16,7 @@ pub fn project_object(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, Stream
         )));
     }
 
-    let output = project_object_from_current(&mut jiter, input, spec)?;
+    let output = project_object_from_current::<false, false>(&mut jiter, input, spec)?;
     jiter.finish()?;
     Ok(output)
 }
@@ -45,7 +46,7 @@ pub fn project_array(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamE
                 "Expected array items to be JSON objects, got {peek:?}"
             )));
         }
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
 
         while let Some(peek) = jiter.array_step()? {
             if peek != Peek::Object {
@@ -54,7 +55,7 @@ pub fn project_array(input: &[u8], spec: &ObjectSpec) -> Result<Vec<u8>, StreamE
                 )));
             }
             output.push(b',');
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
         }
     }
 
@@ -84,7 +85,7 @@ pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8
             )));
         }
         let mut output = Vec::with_capacity(256);
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
         results.push(output);
 
         while let Some(peek) = jiter.array_step()? {
@@ -94,7 +95,7 @@ pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8
                 )));
             }
             let mut output = Vec::with_capacity(256);
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
             results.push(output);
         }
     }
@@ -180,7 +181,7 @@ pub fn project_array_items_sliced(
                     )));
                 }
                 let mut output = Vec::with_capacity(256);
-                project_object_inner(&mut jiter, input, spec, &mut output)?;
+                project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
                 results.push(output);
             } else {
                 jiter.known_skip(peek)?;
@@ -232,7 +233,7 @@ pub fn project_array_nav(
                 "Expected array items to be JSON objects, got {peek:?}"
             )));
         }
-        project_object_inner(&mut jiter, input, spec, &mut output)?;
+        project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
 
         while let Some(peek) = jiter.array_step()? {
             if peek != Peek::Object {
@@ -241,7 +242,7 @@ pub fn project_array_nav(
                 )));
             }
             output.push(b',');
-            project_object_inner(&mut jiter, input, spec, &mut output)?;
+            project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
         }
     }
 
@@ -327,7 +328,7 @@ pub fn project_array_items_partial(
             b'{' => {
                 let slice = &input[pos..];
                 let mut jiter = Jiter::new(slice);
-                match project_object_from_current(&mut jiter, slice, spec) {
+                match project_object_from_current::<true, false>(&mut jiter, slice, spec) {
                     Ok(projected) => {
                         let obj_end = pos + jiter.current_index();
                         items.push(projected);
@@ -358,21 +359,29 @@ pub fn project_array_items_partial(
 // ---------------------------------------------------------------------------
 
 /// Project the object at the current parser position into a new buffer.
-fn project_object_from_current(
-    jiter: &mut Jiter<'_>,
-    input: &[u8],
+///
+/// * `EARLY_EXIT` — skip hash lookups once all known fields have been seen
+///   (safe for array projections; `false` for single-object projection to
+///   preserve "last-wins" semantics for duplicate keys).
+/// * `FAST_SKIP`  — after `EARLY_EXIT` fires, replace jiter with a custom
+///   byte-scanner to skip the remaining object content in O(bytes) rather
+///   than O(elements).  Only safe when the caller does NOT read
+///   `jiter.current_index()` after this call (i.e. array-bulk paths).
+fn project_object_from_current<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
+    jiter: &mut Jiter<'a>,
+    input: &'a [u8],
     spec: &ObjectSpec,
 ) -> Result<Vec<u8>, JiterError> {
     let mut output = Vec::with_capacity(256);
-    project_object_inner(jiter, input, spec, &mut output)?;
+    project_object_inner::<EARLY_EXIT, FAST_SKIP>(jiter, input, spec, &mut output)?;
     Ok(output)
 }
 
 /// Project a single object from the current jiter position.
 /// Assumes jiter has already peeked `Peek::Object`.
-fn project_object_inner(
-    jiter: &mut Jiter<'_>,
-    input: &[u8],
+fn project_object_inner<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
+    jiter: &mut Jiter<'a>,
+    input: &'a [u8],
     spec: &ObjectSpec,
     output: &mut Vec<u8>,
 ) -> Result<(), JiterError> {
@@ -382,17 +391,67 @@ fn project_object_inner(
     let mut first_field = true;
 
     if let Some(key) = first_key {
-        let key_owned = key.to_string();
-        process_key(jiter, input, spec, output, &key_owned, &mut first_field)?;
+        // `spec.fields.get(key)` is the last use of `key`; NLL releases the
+        // jiter borrow before `process_field` mutably borrows it again.
+        let field = spec.fields.get(key);
 
-        loop {
-            let next = jiter.next_key()?;
-            match next {
-                Some(key) => {
-                    let key_owned = key.to_string();
-                    process_key(jiter, input, spec, output, &key_owned, &mut first_field)?;
+        if EARLY_EXIT {
+            let mut remaining = spec.fields.len();
+            if field.is_some() && remaining > 0 {
+                remaining -= 1;
+            }
+            process_field::<EARLY_EXIT, FAST_SKIP>(jiter, input, output, field, &mut first_field)?;
+
+            loop {
+                match jiter.next_key()? {
+                    None => break,
+                    Some(key) => {
+                        if remaining > 0 {
+                            let field = spec.fields.get(key);
+                            if field.is_some() {
+                                remaining -= 1;
+                            }
+                            process_field::<EARLY_EXIT, FAST_SKIP>(
+                                jiter,
+                                input,
+                                output,
+                                field,
+                                &mut first_field,
+                            )?;
+                        } else if FAST_SKIP {
+                            // All known fields found.  Use the fast byte-scanner to
+                            // skip the current value and all remaining key-value pairs
+                            // in one pass, then replace jiter so the caller can
+                            // continue from the correct position.
+                            // NLL: key not used here — jiter borrow released.
+                            let abs_pos = jiter_abs_pos(jiter, input);
+                            let abs_end = fast_skip_to_object_end(input, abs_pos)?;
+                            *jiter = Jiter::new(&input[abs_end..]);
+                            break;
+                        } else {
+                            // All known fields found — skip without hash lookup.
+                            // NLL: key not used here, jiter borrow released.
+                            jiter.next_skip()?;
+                        }
+                    }
                 }
-                None => break,
+            }
+        } else {
+            process_field::<EARLY_EXIT, FAST_SKIP>(jiter, input, output, field, &mut first_field)?;
+            loop {
+                match jiter.next_key()? {
+                    None => break,
+                    Some(key) => {
+                        let field = spec.fields.get(key);
+                        process_field::<EARLY_EXIT, FAST_SKIP>(
+                            jiter,
+                            input,
+                            output,
+                            field,
+                            &mut first_field,
+                        )?;
+                    }
+                }
             }
         }
     }
@@ -401,17 +460,20 @@ fn project_object_inner(
     Ok(())
 }
 
-/// Process a single key-value pair during object projection.
+/// Process a single looked-up field during object projection.
+///
+/// Receives the already-resolved `Option<&FieldSpec>` so that the caller
+/// can drop the `key: &str` borrow on jiter before this function borrows
+/// jiter mutably again.
 #[inline]
-fn process_key(
-    jiter: &mut Jiter<'_>,
-    input: &[u8],
-    spec: &ObjectSpec,
+fn process_field<'a, const EARLY_EXIT: bool, const FAST_SKIP: bool>(
+    jiter: &mut Jiter<'a>,
+    input: &'a [u8],
     output: &mut Vec<u8>,
-    key: &str,
+    field: Option<&crate::spec::FieldSpec>,
     first_field: &mut bool,
 ) -> Result<(), JiterError> {
-    match spec.fields.get(key) {
+    match field {
         None => {
             jiter.next_skip()?;
         }
@@ -422,83 +484,229 @@ fn process_key(
                     if !*first_field {
                         output.push(b',');
                     }
-                    write_json_string(output, &field_spec.output_key);
-                    output.push(b':');
-                    project_object_inner(jiter, input, nested_spec, output)?;
+                    output.extend_from_slice(&field_spec.encoded_key);
+                    project_object_inner::<EARLY_EXIT, FAST_SKIP>(
+                        jiter,
+                        input,
+                        nested_spec,
+                        output,
+                    )?;
                     *first_field = false;
                 } else {
-                    copy_raw_value(jiter, input, output, &field_spec.output_key, first_field)?;
+                    copy_raw_value(jiter, output, field_spec, first_field)?;
                 }
             } else {
-                copy_raw_value(jiter, input, output, &field_spec.output_key, first_field)?;
+                copy_raw_value(jiter, output, field_spec, first_field)?;
             }
         }
     }
     Ok(())
 }
 
-/// Copy a raw JSON value from input to output by tracking byte positions.
+/// Copy a raw JSON value from jiter's backing data to the output buffer.
+///
+/// Uses `Jiter::slice_to_current` so the copy is correct even when jiter was
+/// previously replaced with a sub-slice (which happens in the `FAST_SKIP` path).
 #[inline]
 fn copy_raw_value(
     jiter: &mut Jiter<'_>,
-    input: &[u8],
     output: &mut Vec<u8>,
-    output_key: &str,
+    field_spec: &crate::spec::FieldSpec,
     first_field: &mut bool,
 ) -> Result<(), JiterError> {
     let start = jiter.current_index();
     jiter.next_skip()?;
-    let end = jiter.current_index();
+    // slice_to_current uses jiter.data (which may be a sub-slice after FAST_SKIP
+    // replaces jiter) so the copy is always from the correct bytes.
+    let value_bytes = jiter.slice_to_current(start);
 
     if !*first_field {
         output.push(b',');
     }
-    write_json_string(output, output_key);
-    output.push(b':');
-    output.extend_from_slice(&input[start..end]);
+    output.extend_from_slice(&field_spec.encoded_key);
+    output.extend_from_slice(value_bytes);
 
     *first_field = false;
     Ok(())
 }
 
-/// Write a JSON-encoded string (with quotes) to the output buffer.
+// ---------------------------------------------------------------------------
+// Fast-skip helpers (used by the FAST_SKIP=true path)
+// ---------------------------------------------------------------------------
+
+/// Return the absolute byte offset of jiter's current position within `input`.
+///
+/// Works even after jiter has been replaced with a sub-slice via
+/// `*jiter = Jiter::new(&input[n..])`, because `slice_to_current(0).as_ptr()`
+/// always points to the start of jiter's backing data regardless of
+/// `current_index()`.
 #[inline]
-fn write_json_string(output: &mut Vec<u8>, s: &str) {
-    output.push(b'"');
-    for byte in s.bytes() {
-        match byte {
-            b'"' => {
-                output.push(b'\\');
-                output.push(b'"');
-            }
-            b'\\' => {
-                output.push(b'\\');
-                output.push(b'\\');
-            }
-            b'\n' => {
-                output.push(b'\\');
-                output.push(b'n');
-            }
-            b'\r' => {
-                output.push(b'\\');
-                output.push(b'r');
-            }
-            b'\t' => {
-                output.push(b'\\');
-                output.push(b't');
-            }
-            b if b < 0x20 => {
-                output.extend_from_slice(b"\\u00");
-                output.push(HEX[(b >> 4) as usize]);
-                output.push(HEX[(b & 0xf) as usize]);
-            }
-            _ => output.push(byte),
-        }
-    }
-    output.push(b'"');
+fn jiter_abs_pos(jiter: &Jiter<'_>, input: &[u8]) -> usize {
+    // jiter.data is always &input[base..] for some base (either 0 initially,
+    // or abs_end after a replacement).  Recover base via pointer arithmetic.
+    let jiter_data_ptr = jiter.slice_to_current(0).as_ptr() as usize;
+    let input_ptr = input.as_ptr() as usize;
+    // Safe: jiter.data is a sub-slice of input (guaranteed by our construction).
+    (jiter_data_ptr - input_ptr) + jiter.current_index()
 }
 
-const HEX: [u8; 16] = *b"0123456789abcdef";
+/// Skip a JSON string that has already had its opening `"` consumed.
+/// Returns the index immediately after the closing `"`.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn fast_skip_string(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
+    loop {
+        // SIMD-accelerated search for `"` or `\`
+        match memchr2(b'"', b'\\', &data[pos..]) {
+            None => {
+                return Err(JiterError {
+                    error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingString),
+                    index: pos,
+                })
+            }
+            Some(offset) => {
+                pos += offset;
+                match data[pos] {
+                    b'"' => return Ok(pos + 1),
+                    // Backslash escape: skip `\` and the next character.
+                    _ => pos += 2,
+                }
+            }
+        }
+    }
+}
+
+/// Characters that require a branch in a JSON container (object/array) scan.
+/// Used by `fast_skip_container` to find structural bytes quickly.
+const CONTAINER_STRUCTURAL: [u8; 256] = {
+    let mut t = [0u8; 256];
+    t[b'"' as usize] = 1;
+    t[b'{' as usize] = 1;
+    t[b'}' as usize] = 1;
+    t[b'[' as usize] = 1;
+    t[b']' as usize] = 1;
+    t
+};
+
+/// Skip a JSON container (`{...}` or `[...]`) whose opening bracket has
+/// already been consumed.  `close` is the matching closing bracket.
+/// Returns the index immediately after the closing bracket.
+#[allow(clippy::inline_always)]
+#[inline(always)]
+fn fast_skip_container(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
+    // Depth starts at 1 (we are inside the opening bracket that has already
+    // been consumed by the caller).  The input is always valid JSON (jiter
+    // pre-validated it), so the first `}` / `]` that brings depth to 0 is
+    // the matching closing bracket — no explicit `close` check needed.
+    let mut depth: u32 = 1;
+    loop {
+        // Find the next structural character via a lookup-table scan.
+        // LLVM auto-vectorises this with NEON on AArch64.
+        let offset = data[pos..]
+            .iter()
+            .position(|&b| CONTAINER_STRUCTURAL[b as usize] != 0)
+            .ok_or(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingObject),
+                index: pos,
+            })?;
+        pos += offset;
+        match data[pos] {
+            b'"' => {
+                pos = fast_skip_string(data, pos + 1)?;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                pos += 1;
+            }
+            _ => {
+                // `}` or `]` — closing a container.
+                depth -= 1;
+                pos += 1;
+                if depth == 0 {
+                    return Ok(pos);
+                }
+            }
+        }
+    }
+}
+
+/// Skip a single JSON value starting at `pos`.  Returns the index immediately
+/// after the value (after any leading whitespace has been consumed).
+#[inline]
+fn fast_skip_value(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
+    while pos < data.len() && data[pos].is_ascii_whitespace() {
+        pos += 1;
+    }
+    match data.get(pos) {
+        None => Err(JiterError {
+            error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingValue),
+            index: pos,
+        }),
+        Some(&b'"') => fast_skip_string(data, pos + 1),
+        Some(&b'{' | &b'[') => fast_skip_container(data, pos + 1),
+        Some(b't' | b'n') => Ok(pos + 4), // true / null (both 4 bytes)
+        Some(&b'f') => Ok(pos + 5),       // false
+        _ => {
+            // Number: advance until a delimiter is found.
+            let end = pos
+                + data[pos..]
+                    .iter()
+                    .position(|&b| matches!(b, b',' | b'}' | b']' | b' ' | b'\t' | b'\n' | b'\r'))
+                    .unwrap_or(data.len() - pos);
+            Ok(end)
+        }
+    }
+}
+
+/// Skip from the start of an unknown value (at absolute byte `pos` inside
+/// `data`) to just after the closing `}` of the *containing* JSON object.
+///
+/// Assumes the object's known fields have already been projected and jiter is
+/// positioned at the start of the first unknown value.
+fn fast_skip_to_object_end(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
+    // Skip the first (current) unknown value.
+    pos = fast_skip_value(data, pos)?;
+
+    // Scan the rest of the object using CONTAINER_STRUCTURAL.
+    //
+    // Commas (`,`) and colons (`:`) are NOT in CONTAINER_STRUCTURAL so the
+    // scan skips over them as regular bytes.  This avoids per-pair conditional
+    // checks (whitespace loops, comma/colon checks) and lets LLVM generate a
+    // single tight SIMD scan loop for the common compact-JSON case.
+    //
+    // Depth tracks nesting for containers that appear as values.  When depth
+    // drops to zero at `}` we have found the enclosing object's closing brace.
+    let mut depth: u32 = 0;
+    loop {
+        let offset = data[pos..]
+            .iter()
+            .position(|&b| CONTAINER_STRUCTURAL[b as usize] != 0)
+            .ok_or(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingObject),
+                index: pos,
+            })?;
+        pos += offset;
+        match data[pos] {
+            b'"' => {
+                // Either a key string or a string value — skip it.
+                pos = fast_skip_string(data, pos + 1)?;
+            }
+            b'{' | b'[' => {
+                depth += 1;
+                pos += 1;
+            }
+            _ => {
+                // b'}' or b']' — closing a container.
+                pos += 1;
+                if depth == 0 {
+                    // This is the closing `}` of the object we were called to skip.
+                    return Ok(pos);
+                }
+                depth -= 1;
+            }
+        }
+    }
+}
 
 /// Skip ASCII whitespace bytes starting at `*pos`.
 #[inline]
@@ -515,7 +723,6 @@ fn skip_ws(input: &[u8], pos: &mut usize) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use crate::spec::{FieldSpec, ObjectSpec};
@@ -524,25 +731,15 @@ mod tests {
 
     // Helper constructors
     fn field(output_key: &str) -> FieldSpec {
-        FieldSpec {
-            output_key: output_key.into(),
-            nested: None,
-        }
+        FieldSpec::new(output_key, None)
     }
 
     fn field_nested(output_key: &str, nested: ObjectSpec) -> FieldSpec {
-        FieldSpec {
-            output_key: output_key.into(),
-            nested: Some(Arc::new(nested)),
-        }
+        FieldSpec::new(output_key, Some(Arc::new(nested)))
     }
 
     fn mk_spec(pairs: &[(&str, FieldSpec)]) -> ObjectSpec {
-        let fields: HashMap<Box<str>, FieldSpec> = pairs
-            .iter()
-            .map(|(k, v)| ((*k).into(), v.clone()))
-            .collect();
-        ObjectSpec { fields }
+        ObjectSpec::from_fields(pairs.iter().map(|(k, v)| (Box::from(*k), v.clone())))
     }
 
     fn parse(bytes: &[u8]) -> serde_json::Value {
