@@ -69,10 +69,9 @@ def _iter_validated_raw_array_items(data: Any, validator: Any) -> Iterator[T]:
 
 
 class StreamArray(Generic[T]):
-    """Lazy, indexable view over a JSON array of validated items.
+    """Lazy, indexable view over a JSON array.
 
-    ``StreamArray`` supports iteration, indexing, slicing, and eager
-    materialization via :meth:`to_list`.
+    Supports iteration, indexing, slicing, and :meth:`to_list`.
     """
 
     __slots__ = (
@@ -96,21 +95,16 @@ class StreamArray(Generic[T]):
         prefer_itemwise_iter: bool = False,
         allow_raw_small_iter: bool = False,
     ) -> None:
-        """Create a lazy view over a JSON array source.
-
-        Args:
-            data: JSON document containing the target array.
-            spec: Precompiled field mapping for the item type.
-            adapter: ``TypeAdapter[T]`` used for single-item validation.
-            list_adapter: ``TypeAdapter[list[T]]`` used when validating the
-                full array at once.
-            root_prefix: Dot-separated path to the array within the document,
-                for example ``"data.items"``. Use ``None`` for a top-level
-                array.
-            prefer_itemwise_iter: Prefer validating one item at a time while
-                iterating.
-            allow_raw_small_iter: Allow direct validation for small arrays when
-                the item type already accepts extra fields.
+        """Args:
+        data: Raw JSON bytes containing the array.
+        spec: Field mapping for the item type.
+        adapter: ``TypeAdapter[T]`` for per-item validation.
+        list_adapter: ``TypeAdapter[list[T]]`` for bulk validation.
+        root_prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+            ``None`` for a top-level array.
+        prefer_itemwise_iter: Validate one item at a time while iterating.
+        allow_raw_small_iter: Skip field filtering for small arrays when
+            the item type accepts extra fields.
         """
         self._data = data if isinstance(data, bytes) else bytes(data)
         self._spec = spec
@@ -163,11 +157,7 @@ class StreamArray(Generic[T]):
     def __getitem__(self, index: slice) -> list[T]: ...
 
     def __getitem__(self, index: int | slice) -> T | list[T]:
-        """Return one validated item or a list for a slice.
-
-        Negative indexes are not supported. Slice bounds follow normal Python
-        semantics except that negative ``start``, ``stop``, and ``step``
-        values are rejected.
+        """Return one item or a list for a slice. Negative indexes are not supported.
 
         Raises:
             IndexError: If the index is negative or out of range.

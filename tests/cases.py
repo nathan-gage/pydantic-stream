@@ -92,6 +92,13 @@ class StreamableCase:
     def stream_validate_jsonl_iter(self, source: Any, *args: Any, **kwargs: Any) -> Iterator[Any]:
         return self.stream_validate_jsonl_iter_fn(source, *args, **kwargs)
 
+    def stream_validate_jsonl_aiter(
+        self, source: Any, *args: Any, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        if hasattr(self.model_type, "stream_validate_jsonl_aiter"):
+            return self.model_type.stream_validate_jsonl_aiter(source, *args, **kwargs)
+        return self.model_type.stream_model_validate_jsonl_aiter(source, *args, **kwargs)
+
     def stream_validate_jsonl(self, source: Any, *args: Any, **kwargs: Any) -> list[Any]:
         return self.stream_validate_jsonl_fn(source, *args, **kwargs)
 

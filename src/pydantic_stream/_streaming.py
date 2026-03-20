@@ -1,8 +1,4 @@
-"""Helpers for iterating over validated items from JSON arrays.
-
-These utilities read array data incrementally and hand each item to a
-``TypeAdapter`` as soon as it is complete.
-"""
+"""Streaming JSON array helpers."""
 
 from __future__ import annotations
 
@@ -81,30 +77,72 @@ async def _has_trailing_array_content_async(remainder: bytes, chunks: AsyncItera
     return False
 
 
+def _normalize_jsonl_line(line: bytes) -> bytes:
+    return line[:-1] if line.endswith(b"\r") else line
+
+
+def _iter_jsonl_lines_from_chunks(chunks: Iterator[bytes]) -> Iterator[tuple[int, bytes]]:
+    """Split a synchronous byte-chunk stream into numbered JSONL lines."""
+    buffer = bytearray()
+    line_number = 0
+
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buffer.extend(chunk)
+        while True:
+            try:
+                newline_index = buffer.index(b"\n")
+            except ValueError:
+                break
+            line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            line_number += 1
+            yield line_number, _normalize_jsonl_line(line)
+
+    if buffer:
+        line_number += 1
+        yield line_number, _normalize_jsonl_line(bytes(buffer))
+
+
+async def _aiter_jsonl_lines_from_chunks(
+    chunks: AsyncIterator[bytes],
+) -> AsyncIterator[tuple[int, bytes]]:
+    """Split an async byte-chunk stream into numbered JSONL lines."""
+    buffer = bytearray()
+    line_number = 0
+
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        buffer.extend(chunk)
+        while True:
+            try:
+                newline_index = buffer.index(b"\n")
+            except ValueError:
+                break
+            line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            line_number += 1
+            yield line_number, _normalize_jsonl_line(line)
+
+    if buffer:
+        line_number += 1
+        yield line_number, _normalize_jsonl_line(bytes(buffer))
+
+
 def stream_json_array(
     source: Any,
     adapter: TypeAdapter[T],
     *,
     chunk_size: int = 1_048_576,
 ) -> Iterator[T]:
-    """Iterate over validated items from a JSON array source.
-
-    The source is read incrementally, so memory usage is tied to
-    ``chunk_size`` rather than the full input size.
-
-    This function validates each array item as-is. If you want to ignore
-    unrelated object fields before validation, use the mixin-based helpers
-    on :class:`pydantic_stream.StreamingBaseModelMixin` or
-    :class:`pydantic_stream.StreamingDataclassMixin`.
+    """Iterate over validated items from a JSON array, reading incrementally.
 
     Args:
-        source: A file-like object with ``.read()``, raw bytes, a string, or
-            an iterable of chunks.
-        adapter: ``TypeAdapter`` for the array item type.
-        chunk_size: Number of bytes to read per chunk from file-like sources.
-
-    Yields:
-        Validated items from the array.
+        source: Bytes, str, file-like with ``.read()``, or an iterable of chunks.
+        adapter: ``TypeAdapter`` for the item type.
+        chunk_size: Bytes per read from file-like sources.
     """
     chunks = _source_to_chunks(source, chunk_size)
 
@@ -147,11 +185,7 @@ async def stream_json_array_async(
     *,
     chunk_size: int = 1_048_576,
 ) -> AsyncIterator[T]:
-    """Async variant of :func:`stream_json_array`.
-
-    Accepts async file-like objects and async iterables of chunks in addition
-    to the synchronous input forms supported by :func:`stream_json_array`.
-    """
+    """Like :func:`stream_json_array` but accepts async sources."""
     chunks = _async_source_to_chunks(source, chunk_size)
 
     buffer = bytearray()

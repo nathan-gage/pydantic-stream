@@ -470,6 +470,64 @@ class TestStreamingJsonlIter:
         _assert_user_results(results, [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}])
 
 
+class TestStreamingJsonlAiter:
+    def test_async_read_source(self, user_case: StreamableCase) -> None:
+        data = json_bytes({"id": 1, "name": "Ada"}) + b"\n" + json_bytes({"id": 2, "name": "Grace"})
+        results = asyncio.run(
+            _collect_async(
+                user_case.stream_validate_jsonl_aiter(FakeAsyncStreamingBody(data), chunk_size=8)
+            )
+        )
+        _assert_user_results(results, [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}])
+
+    def test_async_iterable_source(self, user_case: StreamableCase) -> None:
+        data = json_bytes({"id": 1, "name": "Ada"}) + b"\n" + json_bytes({"id": 2, "name": "Grace"})
+        results = asyncio.run(
+            _collect_async(user_case.stream_validate_jsonl_aiter(_chunk_async(data, 5)))
+        )
+        _assert_user_results(results, [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}])
+
+    def test_blank_lines_skipped(self, user_case: StreamableCase) -> None:
+        data = (
+            b"\n  \n"
+            + json_bytes({"id": 1, "name": "Ada"})
+            + b"\r\n"
+            + json_bytes({"id": 2, "name": "Grace"})
+        )
+        results = asyncio.run(
+            _collect_async(
+                user_case.stream_validate_jsonl_aiter(FakeAsyncStreamingBody(data), chunk_size=7)
+            )
+        )
+        _assert_user_results(results, [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}])
+
+    def test_validation_error_wrapped(self, user_case: StreamableCase) -> None:
+        data = (
+            json_bytes({"id": 1, "name": "Ada"})
+            + b"\n"
+            + json_bytes({"id": "not-an-int", "name": "Grace"})
+        )
+        with pytest.raises(ValueError, match="Validation failed for item 1"):
+            asyncio.run(
+                _collect_async(
+                    user_case.stream_validate_jsonl_aiter(
+                        FakeAsyncStreamingBody(data), chunk_size=8
+                    )
+                )
+            )
+
+    def test_parse_error_reports_line_number(self, user_case: StreamableCase) -> None:
+        data = json_bytes({"id": 1, "name": "Ada"}) + b'\n{"id":\n'
+        with pytest.raises(StreamingProjectionError, match="line 2"):
+            asyncio.run(
+                _collect_async(
+                    user_case.stream_validate_jsonl_aiter(
+                        FakeAsyncStreamingBody(data), chunk_size=8
+                    )
+                )
+            )
+
+
 @pytest.fixture(
     params=[TypeAdapter(HarnessUserModel), TypeAdapter(HarnessUserDataclass)],
     ids=["basemodel", "dataclass"],

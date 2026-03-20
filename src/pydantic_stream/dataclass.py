@@ -16,6 +16,7 @@ from ._native import (
 )
 from ._schema import compile_object_spec
 from ._streaming import (
+    _aiter_jsonl_lines_from_chunks,
     _async_source_to_chunks,
     _has_trailing_array_content_async,
     _source_to_chunks,
@@ -32,12 +33,7 @@ def compile_spec_for_type(typ: type[Any]) -> ObjectSpec:
 
 
 class StreamingDataclassMixin:
-    """Mixin that adds JSON streaming helpers to a Pydantic dataclass.
-
-    The class methods on this mixin validate raw JSON input directly,
-    ignore unrelated object fields, and return dataclass instances without
-    requiring ``json.loads()`` first.
-    """
+    """Mixin that adds streaming JSON validation to a Pydantic dataclass."""
 
     __streaming_type_adapter__: ClassVar[TypeAdapter[Any] | None] = None
     __streaming_list_adapter__: ClassVar[TypeAdapter[Any] | None] = None
@@ -79,16 +75,10 @@ class StreamingDataclassMixin:
         cls: type[Streamable],
         source: Any,
     ) -> Streamable:
-        """Parse a JSON object into an instance of the calling dataclass.
-
-        Extra object fields are ignored before validation.
+        """Validate a single JSON object, ignoring unknown fields.
 
         Args:
-            source: ``bytes``, ``str``, a file-like object with ``.read()``,
-                or a zero-argument callable that returns one of those.
-
-        Returns:
-            A validated instance of the calling class.
+            source: Bytes, str, file-like with ``.read()``, or a zero-argument callable.
         """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
@@ -102,20 +92,12 @@ class StreamingDataclassMixin:
         *,
         root_prefix: str | None = None,
     ) -> StreamArray[Streamable]:
-        """Return a lazy :class:`StreamArray` over a JSON array of objects.
-
-        The input is only processed when you iterate, index, slice, or call
-        :meth:`StreamArray.to_list`.
+        """Return a lazy :class:`StreamArray` over a JSON array.
 
         Args:
-            source: ``bytes``, ``str``, a file-like object, or a callable —
-                the same input forms accepted by :meth:`stream_validate_json`.
-            root_prefix: Dot-separated path to the array within the JSON
-                document, for example ``"data.items"``. Use ``None`` for a
-                top-level array.
-
-        Returns:
-            A :class:`StreamArray` of validated dataclass instances.
+            source: Same input forms as :meth:`stream_validate_json`.
+            root_prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+                ``None`` for a top-level array.
         """
         return StreamArray(
             data=_to_bytes(source),
@@ -135,11 +117,7 @@ class StreamingDataclassMixin:
         *,
         chunk_size: int = 1_048_576,
     ) -> Iterator[Streamable]:
-        """Iterate over validated items from a JSON array.
-
-        The source is consumed incrementally, so you can process large arrays
-        without loading the entire document into memory at once.
-        """
+        """Iterate over validated items from a JSON array, reading incrementally."""
         adapter = cls._streaming_adapter()
         validate = adapter.validator.validate_json
         spec = cls._streaming_spec()
@@ -198,11 +176,7 @@ class StreamingDataclassMixin:
         *,
         chunk_size: int = 1_048_576,
     ) -> AsyncIterator[Streamable]:
-        """Async variant of :meth:`stream_validate_json_array_iter`.
-
-        Accepts async file-like objects and async iterables of chunks in
-        addition to the synchronous input forms supported by the sync method.
-        """
+        """Like :meth:`stream_validate_json_array_iter` but accepts async sources."""
         adapter = cls._streaming_adapter()
         validate = adapter.validator.validate_json
         spec = cls._streaming_spec()
@@ -259,16 +233,10 @@ class StreamingDataclassMixin:
         cls: type[Streamable],
         source: Any,
     ) -> Iterator[Streamable]:
-        """Yield validated instances from JSON Lines input.
-
-        Blank lines are ignored.
+        """Iterate over validated instances from JSON Lines input. Blank lines are skipped.
 
         Args:
-            source: ``bytes``, ``str``, a file-like object, or an iterable of
-                ``bytes``/``str`` lines.
-
-        Yields:
-            Validated instances of the calling class.
+            source: Bytes, str, file-like, or an iterable of ``bytes``/``str`` lines.
         """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
@@ -292,6 +260,33 @@ class StreamingDataclassMixin:
                 yield adapter.validate_json(line)
             except ValidationError as exc:
                 raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+
+    @classmethod
+    async def stream_validate_jsonl_aiter(
+        cls: type[Streamable],
+        source: Any,
+        *,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[Streamable]:
+        """Like :meth:`stream_validate_jsonl_iter` but accepts async sources."""
+        adapter = cls._streaming_adapter()
+        spec = cls._streaming_spec()
+        item_index = 0
+
+        async for line_number, raw_line in _aiter_jsonl_lines_from_chunks(
+            _async_source_to_chunks(source, chunk_size)
+        ):
+            if not raw_line.strip():
+                continue
+            try:
+                projected = project_object(raw_line, spec)
+            except StreamingProjectionError as exc:
+                raise StreamingProjectionError(f"{exc} (line {line_number})") from exc
+            try:
+                yield adapter.validate_json(projected)
+            except ValidationError as exc:
+                raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+            item_index += 1
 
     @classmethod
     def stream_validate_jsonl(

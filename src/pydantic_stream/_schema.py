@@ -106,17 +106,7 @@ def _compile_field_spec(
 
 
 def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
-    """Build an :class:`ObjectSpec` for a Pydantic dataclass schema.
-
-    This is an advanced helper for integrations that already work with
-    Pydantic-generated schema mappings.
-
-    Args:
-        dataclass_schema: Schema mapping for a Pydantic dataclass.
-
-    Returns:
-        An :class:`ObjectSpec` suitable for selecting the dataclass fields
-        from JSON input.
+    """Build an :class:`ObjectSpec` from a Pydantic dataclass core schema.
 
     Raises:
         StreamingProjectionError: If the schema is not a dataclass schema or
@@ -147,17 +137,7 @@ def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
 
 
 def compile_model_spec(model_schema: Mapping[str, Any]) -> ObjectSpec:
-    """Build an :class:`ObjectSpec` for a Pydantic model schema.
-
-    This is an advanced helper for integrations that already work with
-    Pydantic-generated schema mappings.
-
-    Args:
-        model_schema: Schema mapping for a ``BaseModel`` subclass.
-
-    Returns:
-        An :class:`ObjectSpec` suitable for selecting the model fields from
-        JSON input.
+    """Build an :class:`ObjectSpec` from a Pydantic model core schema.
 
     Raises:
         StreamingProjectionError: If the schema is not a model schema or uses
