@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use pydantic_stream_core::spec;
 
-#[pyclass(frozen, name = "FieldSpec")]
+#[pyclass(frozen, from_py_object, name = "FieldSpec")]
 #[derive(Clone, Debug)]
 pub struct PyFieldSpec {
     pub inner: spec::FieldSpec,
@@ -41,7 +41,7 @@ impl PyFieldSpec {
     }
 }
 
-#[pyclass(frozen, name = "ObjectSpec")]
+#[pyclass(frozen, from_py_object, name = "ObjectSpec")]
 #[derive(Clone, Debug)]
 pub struct PyObjectSpec {
     pub inner: Arc<spec::ObjectSpec>,

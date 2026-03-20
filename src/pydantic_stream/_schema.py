@@ -1,4 +1,4 @@
-"""Schema compilation — builds Rust FieldSpec/ObjectSpec from pydantic core schemas."""
+"""Helpers for building projection specs from Pydantic schemas."""
 
 from __future__ import annotations
 
@@ -106,6 +106,12 @@ def _compile_field_spec(
 
 
 def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
+    """Build an :class:`ObjectSpec` from a Pydantic dataclass core schema.
+
+    Raises:
+        StreamingProjectionError: If the schema is not a dataclass schema or
+            uses an unsupported alias shape.
+    """
     dataclass_schema = unwrap_schema(dataclass_schema)
     if dataclass_schema.get("type") != "dataclass":
         schema_type = dataclass_schema.get("type")
@@ -131,6 +137,12 @@ def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
 
 
 def compile_model_spec(model_schema: Mapping[str, Any]) -> ObjectSpec:
+    """Build an :class:`ObjectSpec` from a Pydantic model core schema.
+
+    Raises:
+        StreamingProjectionError: If the schema is not a model schema or uses
+            an unsupported alias shape.
+    """
     model_schema = unwrap_schema(model_schema)
     if model_schema.get("type") != "model":
         raise StreamingProjectionError(f"Expected model schema, got {model_schema.get('type')!r}")

@@ -13,13 +13,13 @@ help:
 	"  make dev            Sync deps and build the editable extension." \
 	"  make build          Build the editable extension." \
 	"  make build-release  Build the editable extension with --release." \
-	"  make test           Run Rust + Python tests." \
+	"  make test           Run Rust tests, rebuild the extension, and run Python tests." \
 	"  make test-rust      Run cargo tests only." \
-	"  make test-py        Run Python tests only." \
-	"  make bench          Run the standard timing benchmark suites." \
-	"  make bench-large    Run the large-payload timing benchmarks." \
-	"  make bench-memory   Run the standard memory benchmark suite." \
-	"  make bench-memory-large  Run the large-payload memory benchmarks." \
+	"  make test-py        Rebuild the extension and run Python tests." \
+	"  make bench          Rebuild a release extension and run the standard timing benchmark suites." \
+	"  make bench-large    Rebuild a release extension and run the large-payload timing benchmarks." \
+	"  make bench-memory   Rebuild a release extension and run the standard memory benchmark suite." \
+	"  make bench-memory-large  Rebuild a release extension and run the large-payload memory benchmarks." \
 	"  make lint           Run clippy, rustfmt --check, and ruff." \
 	"  make fmt            Format Rust and Python code." \
 	"  make check          Run lint + test." \
@@ -47,19 +47,19 @@ test: test-rust test-py
 test-rust: .uv
 	cargo test --workspace
 
-test-py: .uv
+test-py: build
 	uv run pytest tests/
 
-bench: .uv
+bench: build-release
 	uv run pytest benchmarks/test_memory_benchmarks.py benchmarks/test_slice_benchmarks.py -m "not large_payload" --benchmark-enable
 
-bench-large: .uv
+bench-large: build-release
 	uv run pytest benchmarks/test_memory_benchmarks.py -m large_payload --benchmark-enable
 
-bench-memory: .uv
+bench-memory: build-release
 	uv run pytest benchmarks/test_memory_profiles.py -m "not large_payload"
 
-bench-memory-large: .uv
+bench-memory-large: build-release
 	uv run pytest benchmarks/test_memory_profiles.py -m large_payload
 
 lint: .uv

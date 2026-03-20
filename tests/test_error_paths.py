@@ -18,10 +18,8 @@ from pydantic_stream import (
     StreamingBaseModelMixin,
     StreamingDataclassMixin,
     StreamingProjectionError,
-    project_array,
-    project_jsonl,
-    project_object,
 )
+from pydantic_stream._native import project_array, project_jsonl, project_object
 from pydantic_stream.base_model import _to_bytes, _to_bytes_jsonl
 
 from .cases import HarnessUserDataclass, HarnessUserModel, json_source, jsonl_source
@@ -371,12 +369,32 @@ class TestSourceTypes:
         result = HarnessUserModel.stream_model_validate_json(b'{"id":1,"name":"Ada"}')
         assert result.id == 1
 
+    def test_bytearray_source_for_single_object(self) -> None:
+        result = HarnessUserModel.stream_model_validate_json(bytearray(b'{"id":1,"name":"Ada"}'))
+        assert result.id == 1
+
+    def test_memoryview_source_for_single_object(self) -> None:
+        result = HarnessUserModel.stream_model_validate_json(memoryview(b'{"id":1,"name":"Ada"}'))
+        assert result.id == 1
+
     def test_str_source_for_array(self) -> None:
         result = HarnessUserModel.stream_model_validate_json_array('[{"id":1,"name":"Ada"}]')
         assert len(list(result)) == 1
 
     def test_bytes_source_for_array(self) -> None:
         result = HarnessUserModel.stream_model_validate_json_array(b'[{"id":1,"name":"Ada"}]')
+        assert len(list(result)) == 1
+
+    def test_bytearray_source_for_array(self) -> None:
+        result = HarnessUserModel.stream_model_validate_json_array(
+            bytearray(b'[{"id":1,"name":"Ada"}]')
+        )
+        assert len(list(result)) == 1
+
+    def test_memoryview_source_for_array(self) -> None:
+        result = HarnessUserModel.stream_model_validate_json_array(
+            memoryview(b'[{"id":1,"name":"Ada"}]')
+        )
         assert len(list(result)) == 1
 
     def test_str_source_for_jsonl(self) -> None:
@@ -388,6 +406,18 @@ class TestSourceTypes:
     def test_bytes_source_for_jsonl(self) -> None:
         result = HarnessUserModel.stream_model_validate_jsonl(
             b'{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}'
+        )
+        assert len(result) == 2
+
+    def test_bytearray_source_for_jsonl(self) -> None:
+        result = HarnessUserModel.stream_model_validate_jsonl(
+            bytearray(b'{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}')
+        )
+        assert len(result) == 2
+
+    def test_memoryview_source_for_jsonl(self) -> None:
+        result = HarnessUserModel.stream_model_validate_jsonl(
+            memoryview(b'{"id":1,"name":"Ada"}\n{"id":2,"name":"Grace"}')
         )
         assert len(result) == 2
 
@@ -563,6 +593,9 @@ class TestSourceNormalization:
     def test_to_bytes_accepts_bytearray(self) -> None:
         assert _to_bytes(bytearray(b"hello")) == b"hello"
 
+    def test_to_bytes_accepts_memoryview(self) -> None:
+        assert _to_bytes(memoryview(b"hello")) == b"hello"
+
     def test_to_bytes_accepts_bytesio(self) -> None:
         assert _to_bytes(BytesIO(b"hello")) == b"hello"
 
@@ -615,6 +648,10 @@ class TestSourceNormalization:
 
     def test_to_bytes_jsonl_accepts_bytearray_iterator(self) -> None:
         result = _to_bytes_jsonl(iter([bytearray(b'{"x":1}')]))
+        assert result == b'{"x":1}'
+
+    def test_to_bytes_jsonl_accepts_memoryview_iterator(self) -> None:
+        result = _to_bytes_jsonl(iter([memoryview(b'{"x":1}')]))
         assert result == b'{"x":1}'
 
     def test_to_bytes_jsonl_rejects_int_iterator(self) -> None:

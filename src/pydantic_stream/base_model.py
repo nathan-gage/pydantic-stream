@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter
@@ -9,27 +9,37 @@ from pydantic_core import ValidationError
 from ._native import (
     ObjectSpec,
     StreamingProjectionError,
-    project_array_items_partial,
     project_jsonl,
     project_object,
+    validate_array_items_partial,
 )
 from ._schema import compile_model_spec
+from ._streaming import (
+    _aiter_jsonl_lines_from_chunks,
+    _async_source_to_chunks,
+    _has_trailing_array_content_async,
+    _source_to_chunks,
+)
 from .stream_array import StreamArray
 
 StreamableModel = TypeVar("StreamableModel", bound="StreamingBaseModelMixin")
 
 
+def _as_native_bytes(data: bytes | bytearray | memoryview) -> bytes:
+    return data if isinstance(data, bytes) else bytes(data)
+
+
 def _to_bytes(source: Any) -> bytes:
-    """Normalize any source to bytes."""
+    """Normalize an eager input source to ``bytes``."""
     if isinstance(source, bytes):
         return source
+    if isinstance(source, (bytearray, memoryview)):
+        return _as_native_bytes(source)
     if isinstance(source, str):
         return source.encode("utf-8")
-    if isinstance(source, bytearray):
-        return bytes(source)
     if callable(source):
         resolved = source()
-        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray)):
+        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray, memoryview)):
             raise StreamingProjectionError(
                 f"Callable source returned another callable: {type(resolved).__name__!r}"
             )
@@ -38,33 +48,36 @@ def _to_bytes(source: Any) -> bytes:
         data = source.read()
         if isinstance(data, str):
             return data.encode("utf-8")
-        return bytes(data) if isinstance(data, bytearray) else data
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, (bytearray, memoryview)):
+            return _as_native_bytes(data)
     raise StreamingProjectionError(f"Unsupported source type: {type(source).__name__!r}")
 
 
 def _to_bytes_jsonl(source: Any) -> bytes:
-    """Like _to_bytes but also handles iterables of str/bytes lines (for JSONL)."""
-    if isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read"):
+    """Like _to_bytes but also handles iterables of str/bytes-like lines (for JSONL)."""
+    if isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read"):
         return _to_bytes(source)
     parts: list[bytes] = []
     for item in source:
         if isinstance(item, str):
             parts.append(item.encode("utf-8"))
-        elif isinstance(item, bytearray):
-            parts.append(bytes(item))
         elif isinstance(item, bytes):
             parts.append(item)
+        elif isinstance(item, (bytearray, memoryview)):
+            parts.append(_as_native_bytes(item))
         else:
             raise StreamingProjectionError(f"Unsupported line type: {type(item).__name__!r}")
     return b"\n".join(parts)
 
 
 def _is_eager_source(source: Any) -> bool:
-    """True if source is bytes/str/bytearray/file-like (not an iterator)."""
-    return isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read")
+    """True if source is bytes-like/str/file-like (not an iterator)."""
+    return isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read")
 
 
-def _has_trailing_array_content(remainder: bytes, chunks: Iterator[Any]) -> bool:
+def _has_trailing_array_content(remainder: Any, chunks: Iterator[Any]) -> bool:
     if remainder.strip():
         return True
     for chunk in chunks:
@@ -79,11 +92,7 @@ def compile_spec_for_model_type(typ: type[Any]) -> ObjectSpec:
 
 
 class StreamingBaseModelMixin(BaseModel):
-    """Minimal schema-aware projection in front of Pydantic validation.
-
-    Uses Rust/jiter projection to emit compact JSON bytes, then calls
-    pydantic's validate_json for fast Rust-to-Rust validation.
-    """
+    """Mixin that adds streaming JSON validation to a Pydantic ``BaseModel``."""
 
     __streaming_type_adapter__: ClassVar[TypeAdapter[Any] | None] = None
     __streaming_list_adapter__: ClassVar[TypeAdapter[Any] | None] = None
@@ -125,6 +134,11 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> StreamableModel:
+        """Validate a single JSON object, ignoring unknown fields.
+
+        Args:
+            source: Bytes, str, file-like with ``.read()``, or a zero-argument callable.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
         projected = project_object(_to_bytes(source), spec)
@@ -137,12 +151,21 @@ class StreamingBaseModelMixin(BaseModel):
         *,
         root_prefix: str | None = None,
     ) -> StreamArray[StreamableModel]:
+        """Return a lazy :class:`StreamArray` over a JSON array.
+
+        Args:
+            source: Same input forms as :meth:`stream_model_validate_json`.
+            root_prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+                ``None`` for a top-level array.
+        """
         return StreamArray(
             data=_to_bytes(source),
             spec=cls._streaming_spec(),
             adapter=cls._streaming_adapter(),
             list_adapter=cls._streaming_list_adapter(),
             root_prefix=root_prefix,
+            prefer_itemwise_iter=True,
+            allow_raw_small_iter=cls.model_config.get("extra") in (None, "ignore"),
         )
 
     @classmethod
@@ -152,17 +175,12 @@ class StreamingBaseModelMixin(BaseModel):
         *,
         chunk_size: int = 1_048_576,
     ) -> Iterator[StreamableModel]:
-        """Stream-validate a JSON array of objects in bounded memory.
-
-        Uses combined streaming + projection for maximum efficiency.
-        """
+        """Iterate over validated items from a JSON array, reading incrementally."""
         adapter = cls._streaming_adapter()
+        validate = adapter.validator.validate_json
         spec = cls._streaming_spec()
 
-        if hasattr(source, "read"):
-            chunks: Iterator[bytes] = iter(lambda: source.read(chunk_size), b"")
-        else:
-            chunks = iter(source)
+        chunks = _source_to_chunks(source, chunk_size)
 
         buffer = bytearray()
         is_start = True
@@ -173,13 +191,19 @@ class StreamingBaseModelMixin(BaseModel):
                 continue
             saw_input = True
             buffer.extend(chunk)
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             is_start = False
             if finished:
-                if _has_trailing_array_content(bytes(buffer), chunks):
+                if _has_trailing_array_content(buffer, chunks):
                     raise StreamingProjectionError("Trailing content after JSON array")
                 return
 
@@ -188,13 +212,78 @@ class StreamingBaseModelMixin(BaseModel):
 
         # Drain remaining buffer
         if buffer:
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             if not finished:
                 raise StreamingProjectionError("Unexpected end of JSON array")
-            if bytes(buffer).strip():
+            if buffer.strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
+
+    @classmethod
+    async def stream_model_validate_json_array_aiter(
+        cls: type[StreamableModel],
+        source: Any,
+        *,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[StreamableModel]:
+        """Like :meth:`stream_model_validate_json_array_iter` but accepts async sources."""
+        adapter = cls._streaming_adapter()
+        validate = adapter.validator.validate_json
+        spec = cls._streaming_spec()
+        chunks = _async_source_to_chunks(source, chunk_size)
+
+        buffer = bytearray()
+        is_start = True
+        saw_input = False
+
+        async for chunk in chunks:
+            if not chunk:
+                continue
+            saw_input = True
+            buffer.extend(chunk)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                raise error
+            del buffer[:consumed]
+            is_start = False
+            if finished:
+                if await _has_trailing_array_content_async(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
+                return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+
+        if buffer:
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                raise error
+            del buffer[:consumed]
+            if not finished:
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if buffer.strip():
                 raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
@@ -202,6 +291,11 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> Iterator[StreamableModel]:
+        """Iterate over validated instances from JSON Lines input. Blank lines are skipped.
+
+        Args:
+            source: Bytes, str, file-like, or an iterable of ``bytes``/``str`` lines.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
 
@@ -226,10 +320,41 @@ class StreamingBaseModelMixin(BaseModel):
                 raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
 
     @classmethod
+    async def stream_model_validate_jsonl_aiter(
+        cls: type[StreamableModel],
+        source: Any,
+        *,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[StreamableModel]:
+        """Like :meth:`stream_model_validate_jsonl_iter` but accepts async sources."""
+        adapter = cls._streaming_adapter()
+        spec = cls._streaming_spec()
+        item_index = 0
+
+        async for line_number, raw_line in _aiter_jsonl_lines_from_chunks(
+            _async_source_to_chunks(source, chunk_size)
+        ):
+            if not raw_line.strip():
+                continue
+            try:
+                projected = project_object(raw_line, spec)
+            except StreamingProjectionError as exc:
+                raise StreamingProjectionError(f"{exc} (line {line_number})") from exc
+            try:
+                yield adapter.validate_json(projected)
+            except ValidationError as exc:
+                raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+            item_index += 1
+
+    @classmethod
     def stream_model_validate_jsonl(
         cls: type[StreamableModel],
         source: Any,
     ) -> list[StreamableModel]:
+        """Eagerly validate all JSONL records and return them as a list.
+
+        Equivalent to ``list(cls.stream_model_validate_jsonl_iter(source))``.
+        """
         return list(cls.stream_model_validate_jsonl_iter(source))
 
 

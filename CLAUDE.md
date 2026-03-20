@@ -15,14 +15,14 @@ make dev            # uv sync + maturin develop (debug build)
 make build-release  # maturin develop --release (needed before benchmarks)
 ```
 
-After any Rust change you must rebuild before running Python tests.
+`make test`, `make test-py`, and the benchmark targets rebuild the native extension for you. Direct `uv run pytest ...` invocations fail fast if the editable extension is missing or stale.
 
 ## Commands
 
 ```bash
-make test           # cargo test + pytest tests/
+make test           # cargo test + maturin develop + pytest tests/
 make test-rust      # Rust only
-make test-py        # Python only
+make test-py        # maturin develop + Python only
 make lint           # clippy (deny warnings) + rustfmt --check + ruff check
 make fmt            # cargo fmt + ruff fix + ruff format
 make check          # lint + test
@@ -72,5 +72,5 @@ src/pydantic_stream/             Python package — mixins, schema compilation, 
 
 ## Conventions
 
-- Rust: `unsafe_code = "forbid"`, clippy pedantic+nursery as warnings, `unwrap_used`/`expect_used` warned (tests `#[allow]`), MSRV 1.75, line width 100
+- Rust: `unsafe_code = "forbid"`, clippy pedantic+nursery as warnings, `unwrap_used`/`expect_used` warned (tests `#[allow]`), MSRV 1.85, line width 100
 - Python: >=3.11, ruff (E/F/I/UP/B), line length 100 (relaxed in tests/benchmarks/demo), `filterwarnings = ["error"]` in pytest

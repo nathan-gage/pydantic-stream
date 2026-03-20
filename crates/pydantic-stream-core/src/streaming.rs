@@ -20,6 +20,29 @@ pub struct PartialArrayResult {
     pub finished: bool,
 }
 
+/// Result of visiting complete items from a partial JSON array buffer.
+#[derive(Debug, Clone, Copy)]
+pub struct PartialArrayVisitResult {
+    /// Number of bytes consumed from the input.
+    pub consumed: usize,
+    /// Whether the closing `]` was reached.
+    pub finished: bool,
+}
+
+#[derive(Debug)]
+pub struct NextArrayItemResult {
+    pub span: Option<ByteSpan>,
+    pub next_pos: usize,
+    pub finished: bool,
+}
+
+/// Error from visiting raw JSON array items.
+#[derive(Debug)]
+pub enum VisitArrayItemsError<E> {
+    Stream(StreamError),
+    Visitor(E),
+}
+
 /// Check whether a `JiterError` indicates truncated (partial) input
 /// rather than genuinely malformed JSON.
 pub(crate) const fn is_partial_error(e: &JiterError) -> bool {
@@ -122,6 +145,168 @@ pub fn extract_array_items(
                         });
                     }
                     Err(e) => return Err(e.into()),
+                }
+            }
+        }
+    }
+}
+
+/// Return the next complete JSON value from a top-level JSON array.
+pub fn next_array_item(
+    input: &[u8],
+    mut pos: usize,
+    started: bool,
+) -> Result<NextArrayItemResult, StreamError> {
+    let len = input.len();
+
+    if !started {
+        let slice = &input[pos..];
+        let mut jiter = Jiter::new(slice);
+        let peek = jiter.peek()?;
+        if peek != Peek::Array {
+            return Err(StreamError::new(format!(
+                "Expected a top-level JSON array, got {peek:?}"
+            )));
+        }
+        let first = jiter.known_array()?;
+        if first.is_none() {
+            return Ok(NextArrayItemResult {
+                span: None,
+                next_pos: pos + jiter.current_index(),
+                finished: true,
+            });
+        }
+        let start = pos + jiter.current_index();
+        jiter.next_skip()?;
+        return Ok(NextArrayItemResult {
+            span: Some(ByteSpan {
+                start,
+                end: pos + jiter.current_index(),
+            }),
+            next_pos: pos + jiter.current_index(),
+            finished: false,
+        });
+    }
+
+    skip_ws(input, &mut pos);
+    match input.get(pos) {
+        Some(b']') => {
+            return Ok(NextArrayItemResult {
+                span: None,
+                next_pos: pos + 1,
+                finished: true,
+            });
+        }
+        Some(b',') => {
+            pos += 1;
+            skip_ws(input, &mut pos);
+        }
+        Some(_) => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::ExpectedListCommaOrEnd),
+                index: pos,
+            }
+            .into());
+        }
+        None => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingList),
+                index: pos,
+            }
+            .into());
+        }
+    }
+
+    if pos >= len {
+        return Err(JiterError {
+            error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingValue),
+            index: pos,
+        }
+        .into());
+    }
+
+    let slice = &input[pos..];
+    let mut jiter = Jiter::new(slice);
+    jiter.next_skip()?;
+    Ok(NextArrayItemResult {
+        span: Some(ByteSpan {
+            start: pos,
+            end: pos + jiter.current_index(),
+        }),
+        next_pos: pos + jiter.current_index(),
+        finished: false,
+    })
+}
+
+/// Visit complete JSON values from a (possibly incomplete) JSON array buffer.
+pub fn visit_array_items<F, E>(
+    input: &[u8],
+    is_start: bool,
+    mut visitor: F,
+) -> Result<PartialArrayVisitResult, VisitArrayItemsError<E>>
+where
+    F: FnMut(ByteSpan) -> Result<(), E>,
+{
+    let mut pos: usize = 0;
+    let len = input.len();
+
+    skip_ws(input, &mut pos);
+
+    if is_start {
+        if pos >= len {
+            return Ok(PartialArrayVisitResult {
+                consumed: 0,
+                finished: false,
+            });
+        }
+        if input[pos] != b'[' {
+            return Err(VisitArrayItemsError::Stream(StreamError::new(format!(
+                "Expected '[', got {:?}",
+                input[pos] as char
+            ))));
+        }
+        pos += 1;
+    }
+
+    loop {
+        skip_ws(input, &mut pos);
+        if pos >= len {
+            return Ok(PartialArrayVisitResult {
+                consumed: pos,
+                finished: false,
+            });
+        }
+
+        match input[pos] {
+            b']' => {
+                return Ok(PartialArrayVisitResult {
+                    consumed: pos + 1,
+                    finished: true,
+                });
+            }
+            b',' => {
+                pos += 1;
+            }
+            _ => {
+                let slice = &input[pos..];
+                let mut scanner = Jiter::new(slice);
+                match scanner.next_skip() {
+                    Ok(()) => {
+                        let val_end = pos + scanner.current_index();
+                        visitor(ByteSpan {
+                            start: pos,
+                            end: val_end,
+                        })
+                        .map_err(VisitArrayItemsError::Visitor)?;
+                        pos = val_end;
+                    }
+                    Err(e) if is_partial_error(&e) => {
+                        return Ok(PartialArrayVisitResult {
+                            consumed: pos,
+                            finished: false,
+                        });
+                    }
+                    Err(e) => return Err(VisitArrayItemsError::Stream(e.into())),
                 }
             }
         }
@@ -357,9 +542,10 @@ mod tests {
 
         let err = navigate_to_prefix(&mut jiter, &["outer", "items"]).unwrap_err();
 
-        assert!(err
-            .message
-            .contains("Expected a JSON object at prefix segment"));
+        assert!(
+            err.message
+                .contains("Expected a JSON object at prefix segment")
+        );
         assert!(err.message.contains("items"));
     }
 
