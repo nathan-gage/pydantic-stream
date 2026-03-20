@@ -79,10 +79,11 @@ def compile_spec_for_model_type(typ: type[Any]) -> ObjectSpec:
 
 
 class StreamingBaseModelMixin(BaseModel):
-    """Minimal schema-aware projection in front of Pydantic validation.
+    """Mixin that adds streaming JSON helpers to a ``BaseModel``.
 
-    Uses Rust/jiter projection to emit compact JSON bytes, then calls
-    pydantic's validate_json for fast Rust-to-Rust validation.
+    The ``stream_model_validate_*`` methods drop undeclared fields before
+    validation, so large payloads can be processed without first materializing
+    the full input into Python objects.
     """
 
     __streaming_type_adapter__: ClassVar[TypeAdapter[Any] | None] = None
@@ -125,6 +126,11 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> StreamableModel:
+        """Validate one JSON object after projecting away undeclared fields.
+
+        ``source`` may be bytes, str, bytearray, a file-like object, or a
+        callable returning one of those.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
         projected = project_object(_to_bytes(source), spec)
@@ -137,6 +143,11 @@ class StreamingBaseModelMixin(BaseModel):
         *,
         root_prefix: str | None = None,
     ) -> StreamArray[StreamableModel]:
+        """Return a lazy ``StreamArray`` over a JSON array.
+
+        Pass ``root_prefix`` to target an array inside a document envelope, for
+        example ``root_prefix="pages"`` for ``{"pages": [...]}``.
+        """
         return StreamArray(
             data=_to_bytes(source),
             spec=cls._streaming_spec(),
@@ -153,7 +164,11 @@ class StreamingBaseModelMixin(BaseModel):
         root_prefix: str | None = None,
         chunk_size: int = 1_048_576,
     ) -> Iterator[StreamableModel]:
-        """Stream-validate a top-level or prefixed JSON array in bounded memory."""
+        """Yield model instances from a JSON array in bounded memory.
+
+        ``source`` may be bytes, str, a reader, or an iterable of byte chunks.
+        Use ``root_prefix`` for nested arrays such as ``{"pages": [...]}``.
+        """
         adapter = cls._streaming_adapter()
         list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
@@ -178,7 +193,11 @@ class StreamingBaseModelMixin(BaseModel):
         root_prefix: str | None = None,
         chunk_size: int = 1_048_576,
     ) -> AsyncIterator[StreamableModel]:
-        """Async stream-validate a top-level or prefixed JSON array."""
+        """Async version of ``stream_model_validate_json_array_iter``.
+
+        ``source`` may be bytes, str, an async reader, or an async iterable of
+        byte chunks. Use ``root_prefix`` for nested arrays.
+        """
         adapter = cls._streaming_adapter()
         list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
@@ -201,6 +220,10 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> Iterator[StreamableModel]:
+        """Yield model instances from JSON Lines input.
+
+        Each non-empty line is projected and validated independently.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
 
@@ -229,6 +252,7 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> list[StreamableModel]:
+        """Materialize JSON Lines input into a list of model instances."""
         return list(cls.stream_model_validate_jsonl_iter(source))
 
 

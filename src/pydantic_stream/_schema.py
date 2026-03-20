@@ -106,6 +106,7 @@ def _compile_field_spec(
 
 
 def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
+    """Compile an ``ObjectSpec`` from a Pydantic dataclass core schema."""
     dataclass_schema = unwrap_schema(dataclass_schema)
     if dataclass_schema.get("type") != "dataclass":
         schema_type = dataclass_schema.get("type")
@@ -131,6 +132,7 @@ def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
 
 
 def compile_model_spec(model_schema: Mapping[str, Any]) -> ObjectSpec:
+    """Compile an ``ObjectSpec`` from a Pydantic model core schema."""
     model_schema = unwrap_schema(model_schema)
     if model_schema.get("type") != "model":
         raise StreamingProjectionError(f"Expected model schema, got {model_schema.get('type')!r}")

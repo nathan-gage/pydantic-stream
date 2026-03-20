@@ -1,4 +1,8 @@
-"""Rust-accelerated JSON streaming and projection for pydantic."""
+"""Stream and project JSON into Pydantic types in bounded memory.
+
+Most users will interact with :class:`StreamingBaseModelMixin`,
+:class:`StreamingDataclassMixin`, and :class:`StreamArray`.
+"""
 
 from ._native import (
     FieldSpec,

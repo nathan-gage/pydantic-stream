@@ -1,4 +1,4 @@
-"""Streaming JSON array parsing and projection helpers."""
+"""Public streaming helpers used by the mixins and advanced callers."""
 
 from __future__ import annotations
 
@@ -490,7 +490,11 @@ def stream_projected_json_array_iter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> Iterator[T]:
-    """Stream projected JSON array items through a caller-supplied validator."""
+    """Yield projected array items through ``validator(item_bytes)``.
+
+    This is an advanced escape hatch for non-model consumers. Most users
+    should prefer the model or dataclass mixin methods.
+    """
     for item_bytes in _stream_projected_json_array_item_bytes_iter(
         source,
         spec,
@@ -508,7 +512,7 @@ async def stream_projected_json_array_aiter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> AsyncIterator[T]:
-    """Async stream projected JSON array items through a validator."""
+    """Async version of ``stream_projected_json_array_iter``."""
     async for item_bytes in _stream_projected_json_array_item_bytes_aiter(
         source,
         spec,
@@ -524,23 +528,11 @@ def stream_json_array(
     *,
     chunk_size: int = 1_048_576,
 ) -> Iterator[T]:
-    """Stream-validate a JSON array from a byte source in bounded memory.
+    """Yield items from a plain JSON array in bounded memory.
 
-    Reads *source* in chunks, finds complete JSON items via Rust,
-    and yields validated instances. Peak memory is bounded by
-    *chunk_size* (plus one incomplete item), not by total input size.
-
-    This function does NOT perform projection — items are validated as-is.
-    For projection + streaming, use
-    ``stream_projected_json_array_iter(...)`` or the streamable mixin helpers.
-
-    Args:
-        source: A file-like object with .read(), bytes/str, or an iterable of chunks.
-        adapter: A pydantic TypeAdapter for the item type.
-        chunk_size: Bytes to read per chunk (default 1MB).
-
-    Yields:
-        Validated instances of the adapter's type.
+    This helper does not perform projection; it validates each item as-is with
+    ``adapter.validate_json``. For projection-aware streaming, prefer the mixin
+    methods or ``stream_projected_json_array_iter``.
     """
     chunks = _source_to_chunks(source, chunk_size)
 

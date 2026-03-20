@@ -16,9 +16,10 @@ T = TypeVar("T")
 
 
 class StreamArray(Generic[T]):
-    """Lazy array container that holds raw bytes and re-parses on demand.
+    """Lazy view over a projected JSON array.
 
-    Supports iteration, indexing, slicing, and bulk materialization via ``to_list()``.
+    Supports iteration, indexing, slicing, and ``to_list()`` without eagerly
+    validating the entire array up front.
     """
 
     __slots__ = ("_data", "_spec", "_adapter", "_list_adapter", "_prefix")
@@ -38,6 +39,7 @@ class StreamArray(Generic[T]):
         self._prefix = root_prefix
 
     def __iter__(self) -> Iterator[T]:
+        """Iterate over validated items on demand."""
         if self._prefix:
             yield from _validate_json_blob_batches_iter(
                 _stream_projected_json_array_blob_batches_iter(
@@ -75,6 +77,10 @@ class StreamArray(Generic[T]):
     def __getitem__(self, index: slice) -> list[T]: ...
 
     def __getitem__(self, index: int | slice) -> T | list[T]:
+        """Return one validated item, or a validated list for a slice.
+
+        Negative indices and negative slice steps are not supported.
+        """
         if isinstance(index, slice):
             start, stop, step = index.start, index.stop, index.step
             if start is not None and start < 0:
@@ -105,11 +111,7 @@ class StreamArray(Generic[T]):
         return self._adapter.validate_json(items[0])
 
     def to_list(self) -> list[T]:
-        """Bulk materialization fast path.
-
-        Calls Rust once to produce the full projected array, then validates
-        everything in a single pydantic-core pass.
-        """
+        """Materialize the whole array and validate it in one pass."""
         blob = project_array_nav(self._data, self._spec, self._prefix)
         return self._list_adapter.validate_json(blob)
 
