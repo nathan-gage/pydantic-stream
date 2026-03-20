@@ -18,10 +18,8 @@ from pydantic_stream import (
     StreamingBaseModelMixin,
     StreamingDataclassMixin,
     StreamingProjectionError,
-    project_array,
-    project_jsonl,
-    project_object,
 )
+from pydantic_stream._native import project_array, project_jsonl, project_object
 from pydantic_stream.base_model import _to_bytes, _to_bytes_jsonl
 
 from .cases import HarnessUserDataclass, HarnessUserModel, json_source, jsonl_source

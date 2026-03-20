@@ -95,6 +95,20 @@ class StreamArray(Generic[T]):
         prefer_itemwise_iter: bool = False,
         allow_raw_small_iter: bool = False,
     ) -> None:
+        """Wrap raw JSON bytes for lazy projection + validation.
+
+        Args:
+            data: Raw JSON bytes (bytes, bytearray, or memoryview).
+            spec: Compiled projection spec for the item type.
+            adapter: ``TypeAdapter[T]`` for per-item validation.
+            list_adapter: ``TypeAdapter[list[T]]`` for bulk array validation.
+            root_prefix: Dot-separated path to the array within the document,
+                e.g. ``"data.items"``. ``None`` for a top-level array.
+            prefer_itemwise_iter: Force item-by-item iteration regardless of
+                input size (lower peak memory, slightly lower throughput).
+            allow_raw_small_iter: Skip projection for very small inputs when
+                the model accepts extra fields (``extra="ignore"`` or unset).
+        """
         self._data = data
         self._spec = spec
         self._adapter = adapter
@@ -146,6 +160,17 @@ class StreamArray(Generic[T]):
     def __getitem__(self, index: slice) -> list[T]: ...
 
     def __getitem__(self, index: int | slice) -> T | list[T]:
+        """Project and validate one item or a slice of items.
+
+        Integer indexing: returns the single projected and validated item at
+        *index*. Negative indices are not supported.
+
+        Slice indexing: returns a list of projected and validated items for the
+        given slice. Negative start, stop, and step values are not supported.
+
+        Raises:
+            IndexError: If the index is out of range or negative.
+        """
         if isinstance(index, slice):
             start, stop, step = index.start, index.stop, index.step
             if start is not None and start < 0:

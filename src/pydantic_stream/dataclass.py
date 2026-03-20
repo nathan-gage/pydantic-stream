@@ -73,6 +73,15 @@ class StreamingDataclassMixin:
         cls: type[Streamable],
         source: Any,
     ) -> Streamable:
+        """Parse and validate a single JSON object, projecting out unknown fields.
+
+        Args:
+            source: bytes, str, a file-like object with ``.read()``, or a
+                zero-argument callable that returns one of the above.
+
+        Returns:
+            A validated instance of the calling class.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
         projected = project_object(_to_bytes(source), spec)
@@ -85,6 +94,18 @@ class StreamingDataclassMixin:
         *,
         root_prefix: str | None = None,
     ) -> StreamArray[Streamable]:
+        """Return a lazy :class:`StreamArray` wrapping a JSON array.
+
+        Args:
+            source: bytes, str, a file-like object, or a callable — same as
+                :meth:`stream_validate_json`.
+            root_prefix: Dot-separated path to the array within the JSON
+                document, e.g. ``"data.items"``. Leave as ``None`` for a
+                top-level array.
+
+        Returns:
+            A :class:`StreamArray` of validated dataclass instances.
+        """
         return StreamArray(
             data=_to_bytes(source),
             spec=cls._streaming_spec(),
@@ -163,6 +184,15 @@ class StreamingDataclassMixin:
         cls: type[Streamable],
         source: Any,
     ) -> Iterator[Streamable]:
+        """Yield validated instances from a JSONL source.
+
+        Args:
+            source: bytes, str, file-like object, or an iterable of
+                ``bytes``/``str`` lines.
+
+        Yields:
+            Validated instances of the calling class.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
 
@@ -191,6 +221,10 @@ class StreamingDataclassMixin:
         cls: type[Streamable],
         source: Any,
     ) -> list[Streamable]:
+        """Eagerly validate all JSONL records and return them as a list.
+
+        Equivalent to ``list(cls.stream_validate_jsonl_iter(source))``.
+        """
         return list(cls.stream_validate_jsonl_iter(source))
 
 

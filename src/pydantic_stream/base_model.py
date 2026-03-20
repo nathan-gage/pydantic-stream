@@ -122,6 +122,15 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> StreamableModel:
+        """Parse and validate a single JSON object, projecting out unknown fields.
+
+        Args:
+            source: bytes, str, a file-like object with ``.read()``, or a
+                zero-argument callable that returns one of the above.
+
+        Returns:
+            A validated instance of the calling class.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
         projected = project_object(_to_bytes(source), spec)
@@ -134,6 +143,21 @@ class StreamingBaseModelMixin(BaseModel):
         *,
         root_prefix: str | None = None,
     ) -> StreamArray[StreamableModel]:
+        """Return a lazy :class:`StreamArray` wrapping a JSON array.
+
+        The array is not parsed until you iterate, index, or call
+        :meth:`StreamArray.to_list`.
+
+        Args:
+            source: bytes, str, a file-like object, or a callable — same as
+                :meth:`stream_model_validate_json`.
+            root_prefix: Dot-separated path to the array within the JSON
+                document, e.g. ``"data.items"``. Leave as ``None`` for a
+                top-level array.
+
+        Returns:
+            A :class:`StreamArray` of validated model instances.
+        """
         return StreamArray(
             data=_to_bytes(source),
             spec=cls._streaming_spec(),
@@ -214,6 +238,17 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> Iterator[StreamableModel]:
+        """Yield validated instances from a JSONL source.
+
+        Each non-empty line is projected and validated independently.
+
+        Args:
+            source: bytes, str, file-like object, or an iterable of
+                ``bytes``/``str`` lines.
+
+        Yields:
+            Validated instances of the calling class.
+        """
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
 
@@ -242,6 +277,10 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
     ) -> list[StreamableModel]:
+        """Eagerly validate all JSONL records and return them as a list.
+
+        Equivalent to ``list(cls.stream_model_validate_jsonl_iter(source))``.
+        """
         return list(cls.stream_model_validate_jsonl_iter(source))
 
 

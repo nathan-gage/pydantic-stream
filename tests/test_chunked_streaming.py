@@ -9,12 +9,8 @@ from collections.abc import Iterator
 import pytest
 from pydantic import TypeAdapter
 
-from pydantic_stream import (
-    StreamingProjectionError,
-    project_array_items,
-    project_array_items_partial,
-    stream_json_array,
-)
+from pydantic_stream import StreamingProjectionError, stream_json_array
+from pydantic_stream._native import project_array_items, project_array_items_partial
 
 from .cases import HarnessUserDataclass, HarnessUserModel, StreamableCase, json_bytes
 
