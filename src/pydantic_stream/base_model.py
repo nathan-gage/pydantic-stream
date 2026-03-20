@@ -9,9 +9,9 @@ from pydantic_core import ValidationError
 from ._native import (
     ObjectSpec,
     StreamingProjectionError,
-    project_array_items_partial,
     project_jsonl,
     project_object,
+    validate_array_items_partial,
 )
 from ._schema import compile_model_spec
 from .stream_array import StreamArray
@@ -19,17 +19,15 @@ from .stream_array import StreamArray
 StreamableModel = TypeVar("StreamableModel", bound="StreamingBaseModelMixin")
 
 
-def _to_bytes(source: Any) -> bytes:
-    """Normalize any source to bytes."""
-    if isinstance(source, bytes):
+def _to_bytes(source: Any) -> Any:
+    """Normalize any eager source to a bytes-like object accepted by the Rust layer."""
+    if isinstance(source, (bytes, bytearray, memoryview)):
         return source
     if isinstance(source, str):
         return source.encode("utf-8")
-    if isinstance(source, bytearray):
-        return bytes(source)
     if callable(source):
         resolved = source()
-        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray)):
+        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray, memoryview)):
             raise StreamingProjectionError(
                 f"Callable source returned another callable: {type(resolved).__name__!r}"
             )
@@ -38,21 +36,20 @@ def _to_bytes(source: Any) -> bytes:
         data = source.read()
         if isinstance(data, str):
             return data.encode("utf-8")
-        return bytes(data) if isinstance(data, bytearray) else data
+        if isinstance(data, (bytes, bytearray, memoryview)):
+            return data
     raise StreamingProjectionError(f"Unsupported source type: {type(source).__name__!r}")
 
 
-def _to_bytes_jsonl(source: Any) -> bytes:
-    """Like _to_bytes but also handles iterables of str/bytes lines (for JSONL)."""
-    if isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read"):
+def _to_bytes_jsonl(source: Any) -> Any:
+    """Like _to_bytes but also handles iterables of str/bytes-like lines (for JSONL)."""
+    if isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read"):
         return _to_bytes(source)
-    parts: list[bytes] = []
+    parts: list[Any] = []
     for item in source:
         if isinstance(item, str):
             parts.append(item.encode("utf-8"))
-        elif isinstance(item, bytearray):
-            parts.append(bytes(item))
-        elif isinstance(item, bytes):
+        elif isinstance(item, (bytes, bytearray, memoryview)):
             parts.append(item)
         else:
             raise StreamingProjectionError(f"Unsupported line type: {type(item).__name__!r}")
@@ -60,11 +57,11 @@ def _to_bytes_jsonl(source: Any) -> bytes:
 
 
 def _is_eager_source(source: Any) -> bool:
-    """True if source is bytes/str/bytearray/file-like (not an iterator)."""
-    return isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read")
+    """True if source is bytes-like/str/file-like (not an iterator)."""
+    return isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read")
 
 
-def _has_trailing_array_content(remainder: bytes, chunks: Iterator[Any]) -> bool:
+def _has_trailing_array_content(remainder: Any, chunks: Iterator[Any]) -> bool:
     if remainder.strip():
         return True
     for chunk in chunks:
@@ -143,6 +140,8 @@ class StreamingBaseModelMixin(BaseModel):
             adapter=cls._streaming_adapter(),
             list_adapter=cls._streaming_list_adapter(),
             root_prefix=root_prefix,
+            prefer_itemwise_iter=True,
+            allow_raw_small_iter=cls.model_config.get("extra") in (None, "ignore"),
         )
 
     @classmethod
@@ -157,6 +156,7 @@ class StreamingBaseModelMixin(BaseModel):
         Uses combined streaming + projection for maximum efficiency.
         """
         adapter = cls._streaming_adapter()
+        validate = adapter.validator.validate_json
         spec = cls._streaming_spec()
 
         if hasattr(source, "read"):
@@ -173,13 +173,19 @@ class StreamingBaseModelMixin(BaseModel):
                 continue
             saw_input = True
             buffer.extend(chunk)
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                buffer,
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             is_start = False
             if finished:
-                if _has_trailing_array_content(bytes(buffer), chunks):
+                if _has_trailing_array_content(buffer, chunks):
                     raise StreamingProjectionError("Trailing content after JSON array")
                 return
 
@@ -188,13 +194,19 @@ class StreamingBaseModelMixin(BaseModel):
 
         # Drain remaining buffer
         if buffer:
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                buffer,
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             if not finished:
                 raise StreamingProjectionError("Unexpected end of JSON array")
-            if bytes(buffer).strip():
+            if buffer.strip():
                 raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod

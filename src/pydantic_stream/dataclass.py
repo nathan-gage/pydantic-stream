@@ -10,9 +10,9 @@ from pydantic_core import ValidationError
 from ._native import (
     ObjectSpec,
     StreamingProjectionError,
-    project_array_items_partial,
     project_jsonl,
     project_object,
+    validate_array_items_partial,
 )
 from ._schema import compile_object_spec
 from .base_model import _has_trailing_array_content, _is_eager_source, _to_bytes, _to_bytes_jsonl
@@ -91,6 +91,9 @@ class StreamingDataclassMixin:
             adapter=cls._streaming_adapter(),
             list_adapter=cls._streaming_list_adapter(),
             root_prefix=root_prefix,
+            prefer_itemwise_iter=True,
+            allow_raw_small_iter=getattr(cls, "__pydantic_config__", {}).get("extra")
+            in (None, "ignore"),
         )
 
     @classmethod
@@ -102,6 +105,7 @@ class StreamingDataclassMixin:
     ) -> Iterator[Streamable]:
         """Stream-validate a JSON array of objects in bounded memory."""
         adapter = cls._streaming_adapter()
+        validate = adapter.validator.validate_json
         spec = cls._streaming_spec()
 
         if hasattr(source, "read"):
@@ -118,13 +122,19 @@ class StreamingDataclassMixin:
                 continue
             saw_input = True
             buffer.extend(chunk)
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                buffer,
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             is_start = False
             if finished:
-                if _has_trailing_array_content(bytes(buffer), chunks):
+                if _has_trailing_array_content(buffer, chunks):
                     raise StreamingProjectionError("Trailing content after JSON array")
                 return
 
@@ -133,13 +143,19 @@ class StreamingDataclassMixin:
 
         # Drain remaining buffer
         if buffer:
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
+            items, consumed, finished, error = validate_array_items_partial(
+                buffer,
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                raise error
             del buffer[:consumed]
             if not finished:
                 raise StreamingProjectionError("Unexpected end of JSON array")
-            if bytes(buffer).strip():
+            if buffer.strip():
                 raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
