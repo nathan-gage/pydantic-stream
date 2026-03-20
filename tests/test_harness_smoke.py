@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import io
 
+import pydantic_stream
 from pydantic_stream import StreamArray
 
 from .cases import HarnessUserDataclass, HarnessUserModel, json_bytes, json_source, jsonl_bytes
@@ -74,3 +76,16 @@ def test_array_usage_example_supports_root_prefix() -> None:
     )
 
     assert [item.id for item in result[0:2]] == [1, 2]
+
+
+def test_top_level_module_help_surface_is_focused() -> None:
+    names = dir(pydantic_stream)
+    doc = inspect.getdoc(pydantic_stream)
+
+    assert "StreamingBaseModelMixin" in names
+    assert "StreamingDataclassMixin" in names
+    assert "StreamArray" in names
+    assert "Streamable" not in names
+    assert "StreamableModel" not in names
+    assert doc is not None
+    assert "Start here:" in doc
