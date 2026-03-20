@@ -201,12 +201,12 @@ class TestPrefixedAsyncIterators:
         chunks = [
             b'{"it',
             b'ems"',
-            b':',
-            b'[',
+            b":",
+            b"[",
             b'{"id":1,"na',
             b'me":"Ada"},',
             b'{"id":2,"name":"Grace"}',
-            b']',
+            b"]",
             b',"tail":{"count":2}}',
         ]
 

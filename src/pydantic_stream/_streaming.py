@@ -144,7 +144,7 @@ def _recontext_stream_validation_error(
     root_prefix: str | None,
     approx_byte_offset: int | None = None,
 ) -> ValidationError:
-    loc_prefix = ((*root_prefix.split("."), item_index) if root_prefix else (item_index,))
+    loc_prefix = (*root_prefix.split("."), item_index) if root_prefix else (item_index,)
 
     if root_prefix is None:
         context = f"array item {item_index}"

@@ -27,14 +27,12 @@ class ProjectedArrayBlobStreamer:
 
 class StreamingProjectionError(RuntimeError): ...
 
-
 def extract_array_items(
     data: bytes,
     is_start: bool = True,
 ) -> tuple[list[bytes], int, bool]:
     """Pull complete items from a possibly partial JSON array."""
     ...
-
 
 def locate_array_start(
     data: bytes,
@@ -43,26 +41,21 @@ def locate_array_start(
     """Return the byte offset of the ``[`` for a top-level or prefixed array."""
     ...
 
-
 def project_array(data: bytes, spec: ObjectSpec) -> bytes:
     """Return a compact JSON array containing only fields declared in ``spec``."""
     ...
-
 
 def project_array_items(data: bytes, spec: ObjectSpec) -> list[bytes]:
     """Return one projected JSON object per array item."""
     ...
 
-
 def project_object(data: bytes, spec: ObjectSpec) -> bytes:
     """Return a compact JSON object containing only fields declared in ``spec``."""
     ...
 
-
 def project_jsonl(data: bytes, spec: ObjectSpec) -> list[bytes]:
     """Project JSON Lines input and return one projected JSON byte string per line."""
     ...
-
 
 def project_array_items_sliced(
     data: bytes,
@@ -75,7 +68,6 @@ def project_array_items_sliced(
     """Project only the selected items from a top-level or prefixed array."""
     ...
 
-
 def project_array_nav(
     data: bytes,
     spec: ObjectSpec,
@@ -84,7 +76,6 @@ def project_array_nav(
     """Project a top-level or prefixed JSON array and return it as compact JSON."""
     ...
 
-
 def project_array_items_partial(
     data: bytes,
     spec: ObjectSpec,
@@ -92,7 +83,6 @@ def project_array_items_partial(
 ) -> tuple[list[bytes], int, bool]:
     """Project one possibly partial array chunk into complete item bytes."""
     ...
-
 
 def project_array_blob_partial(
     data: bytes,
