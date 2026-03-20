@@ -5,7 +5,7 @@ from __future__ import annotations
 import enum
 import io
 import json
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
@@ -81,6 +81,13 @@ class StreamableCase:
         self, source: Any, *args: Any, **kwargs: Any
     ) -> Iterator[Any]:
         return self.stream_validate_json_array_iter_fn(source, *args, **kwargs)
+
+    def stream_validate_json_array_aiter(
+        self, source: Any, *args: Any, **kwargs: Any
+    ) -> AsyncIterator[Any]:
+        if hasattr(self.model_type, "stream_validate_json_array_aiter"):
+            return self.model_type.stream_validate_json_array_aiter(source, *args, **kwargs)
+        return self.model_type.stream_model_validate_json_array_aiter(source, *args, **kwargs)
 
     def stream_validate_jsonl_iter(self, source: Any, *args: Any, **kwargs: Any) -> Iterator[Any]:
         return self.stream_validate_jsonl_iter_fn(source, *args, **kwargs)

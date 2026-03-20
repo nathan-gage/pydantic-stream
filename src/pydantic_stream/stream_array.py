@@ -69,9 +69,10 @@ def _iter_validated_raw_array_items(data: Any, validator: Any) -> Iterator[T]:
 
 
 class StreamArray(Generic[T]):
-    """Lazy array container that holds raw bytes and re-parses on demand.
+    """Lazy, indexable view over a JSON array of validated items.
 
-    Supports iteration, indexing, slicing, and bulk materialization via ``to_list()``.
+    ``StreamArray`` supports iteration, indexing, slicing, and eager
+    materialization via :meth:`to_list`.
     """
 
     __slots__ = (
@@ -95,21 +96,23 @@ class StreamArray(Generic[T]):
         prefer_itemwise_iter: bool = False,
         allow_raw_small_iter: bool = False,
     ) -> None:
-        """Wrap raw JSON bytes for lazy projection + validation.
+        """Create a lazy view over a JSON array source.
 
         Args:
-            data: Raw JSON bytes (bytes, bytearray, or memoryview).
-            spec: Compiled projection spec for the item type.
-            adapter: ``TypeAdapter[T]`` for per-item validation.
-            list_adapter: ``TypeAdapter[list[T]]`` for bulk array validation.
+            data: JSON document containing the target array.
+            spec: Precompiled field mapping for the item type.
+            adapter: ``TypeAdapter[T]`` used for single-item validation.
+            list_adapter: ``TypeAdapter[list[T]]`` used when validating the
+                full array at once.
             root_prefix: Dot-separated path to the array within the document,
-                e.g. ``"data.items"``. ``None`` for a top-level array.
-            prefer_itemwise_iter: Force item-by-item iteration regardless of
-                input size (lower peak memory, slightly lower throughput).
-            allow_raw_small_iter: Skip projection for very small inputs when
-                the model accepts extra fields (``extra="ignore"`` or unset).
+                for example ``"data.items"``. Use ``None`` for a top-level
+                array.
+            prefer_itemwise_iter: Prefer validating one item at a time while
+                iterating.
+            allow_raw_small_iter: Allow direct validation for small arrays when
+                the item type already accepts extra fields.
         """
-        self._data = data
+        self._data = data if isinstance(data, bytes) else bytes(data)
         self._spec = spec
         self._adapter = adapter
         self._list_adapter = list_adapter
@@ -160,16 +163,14 @@ class StreamArray(Generic[T]):
     def __getitem__(self, index: slice) -> list[T]: ...
 
     def __getitem__(self, index: int | slice) -> T | list[T]:
-        """Project and validate one item or a slice of items.
+        """Return one validated item or a list for a slice.
 
-        Integer indexing: returns the single projected and validated item at
-        *index*. Negative indices are not supported.
-
-        Slice indexing: returns a list of projected and validated items for the
-        given slice. Negative start, stop, and step values are not supported.
+        Negative indexes are not supported. Slice bounds follow normal Python
+        semantics except that negative ``start``, ``stop``, and ``step``
+        values are rejected.
 
         Raises:
-            IndexError: If the index is out of range or negative.
+            IndexError: If the index is negative or out of range.
         """
         if isinstance(index, slice):
             start, stop, step = index.start, index.stop, index.step
@@ -200,11 +201,7 @@ class StreamArray(Generic[T]):
         return self._adapter.validator.validate_json(item)
 
     def to_list(self) -> list[T]:
-        """Bulk materialization fast path.
-
-        Calls Rust once to produce the full projected array, then validates
-        everything in a single pydantic-core pass.
-        """
+        """Validate the entire array and return the results as a list."""
         return validate_array_nav(
             self._data,
             self._spec,

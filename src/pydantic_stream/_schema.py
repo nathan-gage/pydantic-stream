@@ -1,4 +1,4 @@
-"""Schema compilation — builds Rust FieldSpec/ObjectSpec from pydantic core schemas."""
+"""Helpers for building projection specs from Pydantic schemas."""
 
 from __future__ import annotations
 
@@ -106,19 +106,21 @@ def _compile_field_spec(
 
 
 def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
-    """Compile a pydantic dataclass core schema into an :class:`ObjectSpec`.
+    """Build an :class:`ObjectSpec` for a Pydantic dataclass schema.
+
+    This is an advanced helper for integrations that already work with
+    Pydantic-generated schema mappings.
 
     Args:
-        dataclass_schema: A pydantic ``core_schema`` dict with
-            ``type == "dataclass"``, typically obtained from
-            ``TypeAdapter(MyDataclass).core_schema``.
+        dataclass_schema: Schema mapping for a Pydantic dataclass.
 
     Returns:
-        An :class:`ObjectSpec` ready for projection.
+        An :class:`ObjectSpec` suitable for selecting the dataclass fields
+        from JSON input.
 
     Raises:
-        StreamingProjectionError: If the schema type is unexpected or an
-            alias path with depth > 1 is encountered.
+        StreamingProjectionError: If the schema is not a dataclass schema or
+            uses an unsupported alias shape.
     """
     dataclass_schema = unwrap_schema(dataclass_schema)
     if dataclass_schema.get("type") != "dataclass":
@@ -145,19 +147,21 @@ def compile_object_spec(dataclass_schema: Mapping[str, Any]) -> ObjectSpec:
 
 
 def compile_model_spec(model_schema: Mapping[str, Any]) -> ObjectSpec:
-    """Compile a pydantic BaseModel core schema into an :class:`ObjectSpec`.
+    """Build an :class:`ObjectSpec` for a Pydantic model schema.
+
+    This is an advanced helper for integrations that already work with
+    Pydantic-generated schema mappings.
 
     Args:
-        model_schema: A pydantic ``core_schema`` dict with
-            ``type == "model"``, typically obtained from
-            ``TypeAdapter(MyModel).core_schema``.
+        model_schema: Schema mapping for a ``BaseModel`` subclass.
 
     Returns:
-        An :class:`ObjectSpec` ready for projection.
+        An :class:`ObjectSpec` suitable for selecting the model fields from
+        JSON input.
 
     Raises:
-        StreamingProjectionError: If the schema type is unexpected or an
-            alias path with depth > 1 is encountered.
+        StreamingProjectionError: If the schema is not a model schema or uses
+            an unsupported alias shape.
     """
     model_schema = unwrap_schema(model_schema)
     if model_schema.get("type") != "model":

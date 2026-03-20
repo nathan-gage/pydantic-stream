@@ -1,17 +1,13 @@
-"""Streaming JSON array parsing — projection-free buffer management.
+"""Helpers for iterating over validated items from JSON arrays.
 
-This module contains the core streaming logic that could become
-TypeAdapter.validate_json_stream() in pydantic. It handles:
-- Chunked reading from any byte source
-- Partial JSON array parsing via Rust
-- Yielding complete item bytes for validation
-
-No ObjectSpec or projection is involved — items are yielded as raw bytes.
+These utilities read array data incrementally and hand each item to a
+``TypeAdapter`` as soon as it is complete.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import inspect
+from collections.abc import AsyncIterator, Iterator
 from typing import Any, TypeVar
 
 from pydantic import TypeAdapter
@@ -21,18 +17,66 @@ from ._native import StreamingProjectionError, extract_array_items
 T = TypeVar("T")
 
 
+def _coerce_chunk_bytes(chunk: Any) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk
+    if isinstance(chunk, str):
+        return chunk.encode("utf-8")
+    if isinstance(chunk, (bytearray, memoryview)):
+        return bytes(chunk)
+    raise StreamingProjectionError(f"Unsupported chunk type: {type(chunk).__name__!r}")
+
+
 def _source_to_chunks(source: Any, chunk_size: int) -> Iterator[bytes]:
-    """Normalize any source into an iterator of byte chunks."""
+    """Normalize a synchronous source into an iterator of byte chunks."""
+    if isinstance(source, (bytes, str, bytearray, memoryview)):
+        return iter((_coerce_chunk_bytes(source),))
     if hasattr(source, "read"):
-        return iter(lambda: source.read(chunk_size), b"")
-    return iter(source)
+        return iter(lambda: _coerce_chunk_bytes(source.read(chunk_size)), b"")
+    return (_coerce_chunk_bytes(chunk) for chunk in source)
+
+
+async def _async_source_to_chunks(source: Any, chunk_size: int) -> AsyncIterator[bytes]:
+    """Normalize async or sync sources into an async iterator of byte chunks."""
+    if isinstance(source, (bytes, str, bytearray, memoryview)):
+        yield _coerce_chunk_bytes(source)
+        return
+
+    read = getattr(source, "read", None)
+    if callable(read):
+        while True:
+            chunk = read(chunk_size)
+            if inspect.isawaitable(chunk):
+                chunk = await chunk
+            if not chunk:
+                return
+            yield _coerce_chunk_bytes(chunk)
+
+    elif hasattr(source, "__aiter__"):
+        async for chunk in source:
+            if chunk:
+                yield _coerce_chunk_bytes(chunk)
+
+    else:
+        for chunk in source:
+            if chunk:
+                yield _coerce_chunk_bytes(chunk)
 
 
 def _has_trailing_array_content(remainder: bytes, chunks: Iterator[bytes]) -> bool:
     if remainder.strip():
         return True
     for chunk in chunks:
-        if chunk and bytes(chunk).strip():
+        if chunk and chunk.strip():
+            return True
+    return False
+
+
+async def _has_trailing_array_content_async(remainder: bytes, chunks: AsyncIterator[bytes]) -> bool:
+    if remainder.strip():
+        return True
+    async for chunk in chunks:
+        if chunk and chunk.strip():
             return True
     return False
 
@@ -43,22 +87,24 @@ def stream_json_array(
     *,
     chunk_size: int = 1_048_576,
 ) -> Iterator[T]:
-    """Stream-validate a JSON array from a byte source in bounded memory.
+    """Iterate over validated items from a JSON array source.
 
-    Reads *source* in chunks, finds complete JSON items via Rust,
-    and yields validated instances. Peak memory is bounded by
-    *chunk_size* (plus one incomplete item), not by total input size.
+    The source is read incrementally, so memory usage is tied to
+    ``chunk_size`` rather than the full input size.
 
-    This function does NOT perform projection — items are validated as-is.
-    For projection + streaming, use StreamingBaseModelMixin.stream_model_validate_json_array_iter.
+    This function validates each array item as-is. If you want to ignore
+    unrelated object fields before validation, use the mixin-based helpers
+    on :class:`pydantic_stream.StreamingBaseModelMixin` or
+    :class:`pydantic_stream.StreamingDataclassMixin`.
 
     Args:
-        source: A file-like object with .read(), or an iterable of bytes chunks.
-        adapter: A pydantic TypeAdapter for the item type.
-        chunk_size: Bytes to read per chunk (default 1MB).
+        source: A file-like object with ``.read()``, raw bytes, a string, or
+            an iterable of chunks.
+        adapter: ``TypeAdapter`` for the array item type.
+        chunk_size: Number of bytes to read per chunk from file-like sources.
 
     Yields:
-        Validated instances of the adapter's type.
+        Validated items from the array.
     """
     chunks = _source_to_chunks(source, chunk_size)
 
@@ -84,7 +130,6 @@ def stream_json_array(
     if saw_input and not buffer:
         raise StreamingProjectionError("Unexpected end of JSON array")
 
-    # Drain remaining buffer
     if buffer:
         items, consumed, finished = extract_array_items(bytes(buffer), is_start)
         for item_bytes in items:
@@ -94,3 +139,52 @@ def stream_json_array(
             raise StreamingProjectionError("Unexpected end of JSON array")
         if bytes(buffer).strip():
             raise StreamingProjectionError("Trailing content after JSON array")
+
+
+async def stream_json_array_async(
+    source: Any,
+    adapter: TypeAdapter[T],
+    *,
+    chunk_size: int = 1_048_576,
+) -> AsyncIterator[T]:
+    """Async variant of :func:`stream_json_array`.
+
+    Accepts async file-like objects and async iterables of chunks in addition
+    to the synchronous input forms supported by :func:`stream_json_array`.
+    """
+    chunks = _async_source_to_chunks(source, chunk_size)
+
+    buffer = bytearray()
+    is_start = True
+    saw_input = False
+
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        saw_input = True
+        buffer.extend(chunk)
+        items, consumed, finished = extract_array_items(bytes(buffer), is_start)
+        for item_bytes in items:
+            yield adapter.validate_json(item_bytes)
+        del buffer[:consumed]
+        is_start = False
+        if finished:
+            if await _has_trailing_array_content_async(bytes(buffer), chunks):
+                raise StreamingProjectionError("Trailing content after JSON array")
+            return
+
+    if saw_input and not buffer:
+        raise StreamingProjectionError("Unexpected end of JSON array")
+
+    if buffer:
+        items, consumed, finished = extract_array_items(bytes(buffer), is_start)
+        for item_bytes in items:
+            yield adapter.validate_json(item_bytes)
+        del buffer[:consumed]
+        if not finished:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+        if bytes(buffer).strip():
+            raise StreamingProjectionError("Trailing content after JSON array")
+
+
+__all__ = ["stream_json_array", "stream_json_array_async"]

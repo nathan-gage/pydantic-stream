@@ -35,7 +35,9 @@ class MyModel(StreamingBaseModelMixin, BaseModel):
 
 obj = MyModel.stream_model_validate_json(huge_bytes)           # single object
 arr = MyModel.stream_model_validate_json_array(huge_bytes)      # array → StreamArray
-for item in MyModel.stream_model_validate_json_array_iter(b):   # array → lazy iter
+for item in MyModel.stream_model_validate_json_array_iter(b):   # sync array stream → iter
+    ...
+async for item in MyModel.stream_model_validate_json_array_aiter(resp.content):
     ...
 for item in MyModel.stream_model_validate_jsonl_iter(b):        # JSONL → lazy iter
     ...
@@ -43,17 +45,33 @@ for item in MyModel.stream_model_validate_jsonl_iter(b):        # JSONL → lazy
 
 `StreamingDataclassMixin` provides the same API for `@pydantic.dataclasses.dataclass` (methods are `stream_validate_*` instead of `stream_model_validate_*`).
 
+For projection-free use cases, the top-level helpers are available too:
+
+```python
+from pydantic import TypeAdapter
+from pydantic_stream import stream_json_array, stream_json_array_async
+
+adapter = TypeAdapter(MyModel)
+items = list(stream_json_array(open("data.json", "rb"), adapter))
+items_async = [
+    item
+    async for item in stream_json_array_async(response.content.iter_chunked(65536), adapter)
+]
+```
+
 ## Development
 
 ```bash
 uv sync
 make dev            # build debug extension
 make build-release  # build release extension (needed for benchmarks)
-make test           # Rust + Python tests
+make test           # Rust tests + fresh editable extension + Python tests
 make lint           # clippy + rustfmt + ruff
 make fmt            # auto-format everything
-make bench          # timing benchmarks
-make bench-memory   # memory benchmarks (memray)
+make bench          # release build + timing benchmarks
+make bench-memory   # release build + memory benchmarks (memray)
 ```
+
+Python tests now fail fast if the native extension is missing or older than the Rust sources, so stale editable builds cannot hide regressions.
 
 Run `make help` for all targets. See `benchmarks/README.md` for save/compare workflows and filtering options.

@@ -1,4 +1,4 @@
-"""Type stubs for the Rust _native extension module."""
+"""Type stubs for native helpers exposed by pydantic-stream."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from collections.abc import Callable
 from typing import Any
 
 class FieldSpec:
-    """Spec for a single projected field.
+    """Field mapping used when selecting data from JSON objects.
 
     Args:
-        output_key: The key written to the projected JSON output.
-        nested: Nested ObjectSpec for nested model/dataclass fields, or None.
+        output_key: Field name used in the projected JSON object.
+        nested: Nested :class:`ObjectSpec` for object-valued fields, if any.
     """
 
     def __init__(self, output_key: str, nested: ObjectSpec | None = None) -> None: ...
@@ -19,10 +19,10 @@ class FieldSpec:
     def __repr__(self) -> str: ...
 
 class ObjectSpec:
-    """Compiled projection spec mapping input JSON keys to FieldSpecs.
+    """Mapping of accepted input keys for an object type.
 
     Args:
-        fields_by_input_key: Mapping from input JSON key to FieldSpec.
+        fields_by_input_key: Mapping from input JSON key to :class:`FieldSpec`.
     """
 
     def __init__(self, fields_by_input_key: dict[str, FieldSpec]) -> None: ...
@@ -31,24 +31,25 @@ class ObjectSpec:
     def __contains__(self, key: str) -> bool: ...
 
 class StreamingProjectionError(RuntimeError):
-    """Raised for JSON parse errors or unsupported schema shapes."""
+    """Raised when the input JSON or schema shape is unsupported."""
 
     ...
 
 # ---------------------------------------------------------------------------
-# Streaming — no projection, no spec required
+# Streaming — no field filtering required
 # ---------------------------------------------------------------------------
 
 def extract_array_items(
     data: bytes,
     is_start: bool = True,
 ) -> tuple[list[bytes], int, bool]:
-    """Extract complete JSON items from a (possibly incomplete) JSON array buffer.
+    """Extract complete items from a full or partial JSON array buffer.
 
     Returns:
-        (items, consumed, finished) where *items* are raw JSON byte strings,
-        *consumed* is the number of bytes that can be discarded from the
-        front of *data*, and *finished* is True when the closing ``]`` was seen.
+        ``(items, consumed, finished)`` where ``items`` are raw JSON byte
+        strings, ``consumed`` is the number of bytes that can be discarded
+        from the front of ``data``, and ``finished`` is ``True`` once the
+        closing ``]`` has been seen.
     """
     ...
 
@@ -56,11 +57,11 @@ def validate_raw_array_items(
     data: bytes,
     validator: Callable[[bytes], Any],
 ) -> tuple[list[Any], BaseException | None]:
-    """Validate all items in a raw JSON array without projection.
+    """Validate every item in a JSON array without field filtering.
 
     Returns:
-        (validated_items, first_error_or_None). Stops after the first
-        validation error; previously validated items are still returned.
+        ``(validated_items, first_error_or_None)``. Validation stops at the
+        first error, but any earlier validated items are still returned.
     """
     ...
 
@@ -70,27 +71,27 @@ def validate_raw_array_item_next(
     pos: int = 0,
     started: bool = False,
 ) -> tuple[Any | None, int, bool]:
-    """Validate the next raw array item starting at *pos* without projection.
+    """Validate the next item in a JSON array.
 
     Returns:
-        (validated_item_or_None, next_pos, finished).
+        ``(validated_item_or_None, next_pos, finished)``.
     """
     ...
 
 # ---------------------------------------------------------------------------
-# Projection — require ObjectSpec
+# Field filtering — require ObjectSpec
 # ---------------------------------------------------------------------------
 
 def project_object(data: bytes, spec: ObjectSpec) -> bytes:
-    """Project a single JSON object, keeping only fields declared in *spec*."""
+    """Return a JSON object containing only the fields described by ``spec``."""
     ...
 
 def project_array(data: bytes, spec: ObjectSpec) -> bytes:
-    """Project a JSON array of objects, returning a compacted JSON array."""
+    """Apply ``spec`` to each object in a JSON array and return the array."""
     ...
 
 def project_array_items(data: bytes, spec: ObjectSpec) -> list[bytes]:
-    """Project a JSON array, returning one projected bytes object per item."""
+    """Return one filtered JSON object per item in a JSON array."""
     ...
 
 def project_array_item_at(
@@ -99,14 +100,14 @@ def project_array_item_at(
     prefix: str | None = None,
     index: int = 0,
 ) -> bytes | None:
-    """Project the array item at *index*, navigating via *prefix* first.
+    """Return one filtered array item by index.
 
     Args:
-        prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+        prefix: Dot-separated path to the array, for example ``"data.items"``.
         index: Zero-based item index.
 
     Returns:
-        Projected JSON bytes, or None if *index* is out of range.
+        Filtered JSON bytes, or ``None`` if ``index`` is out of range.
     """
     ...
 
@@ -115,10 +116,10 @@ def project_array_nav(
     spec: ObjectSpec,
     prefix: str | None = None,
 ) -> bytes:
-    """Navigate to the array at *prefix* and return a projected JSON array.
+    """Navigate to the array at ``prefix`` and apply ``spec`` to each item.
 
     Args:
-        prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+        prefix: Dot-separated path to the array, for example ``"data.items"``.
     """
     ...
 
@@ -130,13 +131,13 @@ def project_array_items_sliced(
     stop: int | None = None,
     step: int = 1,
 ) -> list[bytes]:
-    """Project a slice of array items after optional prefix navigation.
+    """Return a filtered slice of array items.
 
     Args:
-        prefix: Dot-separated path to the array, e.g. ``"data.items"``.
-        start: Inclusive start index (default 0).
-        stop: Exclusive stop index, or None for end of array.
-        step: Step size (default 1).
+        prefix: Dot-separated path to the array, for example ``"data.items"``.
+        start: Inclusive start index.
+        stop: Exclusive stop index, or ``None`` for the end of the array.
+        step: Step size.
     """
     ...
 
@@ -145,20 +146,20 @@ def project_array_items_partial(
     spec: ObjectSpec,
     is_start: bool = True,
 ) -> tuple[list[bytes], int, bool]:
-    """Project complete items from a (possibly incomplete) JSON array chunk.
+    """Filter all complete items currently available in a partial array buffer.
 
     Returns:
-        (items, consumed, finished). Safe to discard the first *consumed*
-        bytes from the buffer after each call.
+        ``(items, consumed, finished)``. After each call, the first
+        ``consumed`` bytes can be discarded from the buffer.
     """
     ...
 
 def project_jsonl(data: bytes, spec: ObjectSpec) -> list[bytes]:
-    """Project each newline-delimited JSON object in *data*."""
+    """Apply ``spec`` to each record in JSON Lines input."""
     ...
 
 # ---------------------------------------------------------------------------
-# Projection + validation — require ObjectSpec and a validator callable
+# Field filtering + validation — require ObjectSpec and a validator callable
 # ---------------------------------------------------------------------------
 
 def validate_array_items(
@@ -166,13 +167,13 @@ def validate_array_items(
     spec: ObjectSpec,
     validator: Callable[[bytes], Any],
 ) -> tuple[list[Any], BaseException | None]:
-    """Project and validate all items in a JSON array.
+    """Filter and validate every item in a JSON array.
 
-    Calls *validator* (e.g. ``TypeAdapter.validate_json``) inside Rust for
-    each projected item, stopping after the first error.
+    ``validator`` is called for each filtered item, usually something like
+    ``TypeAdapter.validate_json``.
 
     Returns:
-        (validated_items, first_error_or_None).
+        ``(validated_items, first_error_or_None)``.
     """
     ...
 
@@ -183,10 +184,10 @@ def validate_array_item_next(
     pos: int = 0,
     started: bool = False,
 ) -> tuple[Any | None, int, bool]:
-    """Project and validate the next array item starting at *pos*.
+    """Filter and validate the next item in a JSON array.
 
     Returns:
-        (validated_item_or_None, next_pos, finished).
+        ``(validated_item_or_None, next_pos, finished)``.
     """
     ...
 
@@ -198,10 +199,10 @@ def validate_array_items_next_batch(
     started: bool = False,
     batch_size: int = 8,
 ) -> tuple[list[Any], int, bool, BaseException | None]:
-    """Project and validate a batch of array items starting at *pos*.
+    """Filter and validate the next batch of items in a JSON array.
 
     Returns:
-        (validated_items, next_pos, finished, first_error_or_None).
+        ``(validated_items, next_pos, finished, first_error_or_None)``.
     """
     ...
 
@@ -212,14 +213,14 @@ def validate_array_items_batched(
     list_validator: Callable[[bytes], Any],
     batch_size: int = 16,
 ) -> tuple[list[Any], BaseException | None]:
-    """Project all items, then validate in batches for throughput.
+    """Validate filtered items in batches.
 
-    Tries to validate each batch as a JSON array using *list_validator*;
-    falls back to per-item validation with *validator* on batch failure so
-    "yield valid items until first error" semantics are preserved.
+    ``list_validator`` is tried on each batch first. If a batch fails,
+    validation falls back to ``validator`` on individual items so callers can
+    still receive successfully validated items before the first error.
 
     Returns:
-        (validated_items, first_error_or_None).
+        ``(validated_items, first_error_or_None)``.
     """
     ...
 
@@ -229,16 +230,13 @@ def validate_array_nav(
     validator: Callable[[bytes], Any],
     prefix: str | None = None,
 ) -> Any:
-    """Navigate to the array at *prefix*, project it, and validate in one pass.
-
-    Calls *validator* on the full projected array bytes (e.g.
-    ``TypeAdapter[list[T]].validate_json``).
+    """Navigate to the array at ``prefix``, filter it, and validate it.
 
     Args:
-        prefix: Dot-separated path to the array, e.g. ``"data.items"``.
+        prefix: Dot-separated path to the array, for example ``"data.items"``.
 
     Returns:
-        Whatever *validator* returns (typically a list of model instances).
+        Whatever ``validator`` returns.
     """
     ...
 
@@ -248,12 +246,9 @@ def validate_array_items_partial(
     validator: Callable[[bytes], Any],
     is_start: bool = True,
 ) -> tuple[list[Any], int, bool, BaseException | None]:
-    """Project and validate complete items from a partial JSON array chunk.
-
-    Designed for streaming pipelines: call repeatedly with successive chunks,
-    discarding the first *consumed* bytes from the buffer after each call.
+    """Filter and validate all complete items in a partial array buffer.
 
     Returns:
-        (validated_items, consumed, finished, first_error_or_None).
+        ``(validated_items, consumed, finished, first_error_or_None)``.
     """
     ...
