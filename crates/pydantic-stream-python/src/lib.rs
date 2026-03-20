@@ -13,6 +13,10 @@ use spec::{PyFieldSpec, PyObjectSpec};
 
 create_exception!(_native, StreamingProjectionError, PyRuntimeError);
 
+/// Incrementally project a top-level or prefixed JSON array.
+///
+/// This is a low-level helper for chunked streaming. ``push(...)`` returns a
+/// projected JSON array blob whenever one or more complete items are ready.
 #[pyclass(name = "ProjectedArrayBlobStreamer")]
 struct PyProjectedArrayBlobStreamer {
     spec: Arc<pydantic_stream_core::spec::ObjectSpec>,
@@ -29,6 +33,8 @@ impl PyProjectedArrayBlobStreamer {
         self.prefix.is_empty()
     }
 
+    /// Create a streamer for a top-level array or a nested array selected by
+    /// ``prefix``.
     #[new]
     #[pyo3(signature = (spec, prefix=None))]
     fn new(spec: &PyObjectSpec, prefix: Option<&str>) -> Self {
@@ -47,6 +53,10 @@ impl PyProjectedArrayBlobStreamer {
         }
     }
 
+    /// Feed one chunk of input.
+    ///
+    /// Returns ``None`` if more input is needed, or a projected JSON array blob
+    /// containing the complete items found so far.
     fn push(&mut self, py: Python<'_>, chunk: &[u8]) -> PyResult<Option<Py<PyAny>>> {
         if self.finished {
             if self.check_trailing() && !trim_ascii(chunk).is_empty() {
@@ -103,6 +113,7 @@ impl PyProjectedArrayBlobStreamer {
         }
     }
 
+    /// Finish the stream and return the last projected blob, if any.
     fn finish(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         if self.finished {
             return Ok(None);
@@ -161,8 +172,9 @@ impl PyProjectedArrayBlobStreamer {
 // Streaming functions (no projection / no spec required)
 // ---------------------------------------------------------------------------
 
-/// Extract complete JSON items from a (possibly incomplete) JSON array buffer.
-/// Returns (`item_bytes_list`, `consumed_bytes`, `finished`).
+/// Pull complete item byte strings out of a possibly partial JSON array.
+///
+/// Returns ``(items, consumed_bytes, finished)``.
 #[pyfunction]
 #[pyo3(signature = (data, is_start=true))]
 fn extract_array_items(
@@ -184,7 +196,7 @@ fn extract_array_items(
     }
 }
 
-/// Locate the `[` byte offset for a top-level or prefixed JSON array.
+/// Return the byte offset of the ``[`` for a top-level or prefixed array.
 #[pyfunction]
 #[pyo3(signature = (data, prefix=None))]
 fn locate_array_start(data: &[u8], prefix: Option<&str>) -> PyResult<Option<usize>> {
@@ -204,7 +216,7 @@ fn locate_array_start(data: &[u8], prefix: Option<&str>) -> PyResult<Option<usiz
 // Projection functions (require ObjectSpec)
 // ---------------------------------------------------------------------------
 
-/// Project a single JSON object, keeping only fields in the spec.
+/// Return a compact JSON object containing only fields declared in ``spec``.
 #[pyfunction]
 fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
     let result = pydantic_stream_core::projection::project_object(data, &spec.inner);
@@ -214,7 +226,7 @@ fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<
     }
 }
 
-/// Project a JSON array of objects, keeping only fields in the spec.
+/// Return a compact JSON array containing only fields declared in ``spec``.
 #[pyfunction]
 fn project_array(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
     let result = pydantic_stream_core::projection::project_array(data, &spec.inner);
@@ -224,7 +236,7 @@ fn project_array(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<P
     }
 }
 
-/// Project a JSON array of objects, returning one `bytes` per item.
+/// Return one projected JSON object per array item.
 #[pyfunction]
 fn project_array_items(
     py: Python<'_>,
@@ -244,7 +256,7 @@ fn project_array_items(
     }
 }
 
-/// Project JSONL input, returning a list of projected JSON byte strings.
+/// Project JSON Lines input and return one projected JSON byte string per line.
 #[pyfunction]
 fn project_jsonl(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Vec<Py<PyAny>>> {
     let result = pydantic_stream_core::projection::project_jsonl(data, &spec.inner);
@@ -260,7 +272,7 @@ fn project_jsonl(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<V
     }
 }
 
-/// Project a JSON array with prefix navigation and slice-based indexing.
+/// Project only the selected items from a top-level or prefixed JSON array.
 #[pyfunction]
 #[pyo3(signature = (data, spec, prefix=None, start=0, stop=None, step=1))]
 #[allow(clippy::similar_names)]
@@ -299,7 +311,7 @@ fn project_array_items_sliced(
     }
 }
 
-/// Project a JSON array with prefix navigation, returning concatenated JSON array.
+/// Project a top-level or prefixed JSON array and return it as compact JSON.
 #[pyfunction]
 #[pyo3(signature = (data, spec, prefix=None))]
 fn project_array_nav(
@@ -321,7 +333,10 @@ fn project_array_nav(
     }
 }
 
-/// Project a partial chunk of a JSON array (streaming + projection combined).
+/// Low-level streaming helper for projected arrays.
+///
+/// Returns ``(items, consumed_bytes, finished)`` for one possibly partial
+/// chunk of input.
 #[pyfunction]
 #[pyo3(signature = (data, spec, is_start=true))]
 fn project_array_items_partial(
@@ -345,7 +360,10 @@ fn project_array_items_partial(
     }
 }
 
-/// Project a partial chunk of a JSON array into a single projected JSON array blob.
+/// Low-level streaming helper that returns one projected JSON array blob.
+///
+/// Returns ``(blob, consumed_bytes, finished)`` for one possibly partial chunk
+/// of input.
 #[pyfunction]
 #[pyo3(signature = (data, spec, is_start=true))]
 fn project_array_blob_partial(

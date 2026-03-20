@@ -4,6 +4,10 @@ use std::sync::Arc;
 
 use pydantic_stream_core::spec;
 
+/// Low-level projection rule for one JSON field.
+///
+/// Most users will not build ``FieldSpec`` directly; it is mainly useful when
+/// constructing an ``ObjectSpec`` by hand.
 #[pyclass(frozen, name = "FieldSpec")]
 #[derive(Clone, Debug)]
 pub struct PyFieldSpec {
@@ -41,6 +45,11 @@ impl PyFieldSpec {
     }
 }
 
+/// Low-level projection spec for one JSON object.
+///
+/// ``ObjectSpec`` tells the Rust projector which input keys to keep. Most
+/// users should get one from ``compile_model_spec(...)`` or
+/// ``compile_object_spec(...)`` instead of constructing it manually.
 #[pyclass(frozen, name = "ObjectSpec")]
 #[derive(Clone, Debug)]
 pub struct PyObjectSpec {
