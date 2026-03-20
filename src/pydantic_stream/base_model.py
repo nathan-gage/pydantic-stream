@@ -167,6 +167,7 @@ class StreamingBaseModelMixin(BaseModel):
             ),
             adapter,
             list_adapter,
+            root_prefix=root_prefix,
         )
 
     @classmethod
@@ -191,6 +192,7 @@ class StreamingBaseModelMixin(BaseModel):
             ),
             adapter,
             list_adapter,
+            root_prefix=root_prefix,
         ):
             yield item
 

@@ -137,6 +137,42 @@ def _root_prefix_eof_error(root_prefix: str) -> StreamingProjectionError:
     )
 
 
+def _recontext_stream_validation_error(
+    exc: ValidationError,
+    *,
+    item_index: int,
+    root_prefix: str | None,
+    approx_byte_offset: int | None = None,
+) -> ValidationError:
+    loc_prefix = ((*root_prefix.split("."), item_index) if root_prefix else (item_index,))
+
+    if root_prefix is None:
+        context = f"array item {item_index}"
+    else:
+        context = f"array item {item_index} under root_prefix {root_prefix!r}"
+    if approx_byte_offset is not None:
+        context += f" near byte offset {approx_byte_offset}"
+
+    errors = []
+    for error in exc.errors(include_url=False):
+        error_data = dict(error)
+        loc = error_data.get("loc", ())
+        if isinstance(loc, tuple):
+            loc_tuple = loc
+        elif isinstance(loc, list):
+            loc_tuple = tuple(loc)
+        else:
+            loc_tuple = (loc,)
+        error_data["loc"] = loc_prefix + loc_tuple
+        errors.append(error_data)
+
+    return ValidationError.from_exception_data(
+        f"{exc.title} ({context})",
+        errors,
+        input_type="json",
+    )
+
+
 def _stream_projected_json_array_item_batches_iter(
     source: Any,
     spec: ObjectSpec,
@@ -344,35 +380,63 @@ def _validate_json_blob_batches_iter(
     batches: Iterator[bytes],
     adapter: TypeAdapter[T],
     list_adapter: TypeAdapter[list[T]],
+    *,
+    root_prefix: str | None = None,
 ) -> Iterator[T]:
     validate = adapter.validate_json
     validate_list = list_adapter.validate_json
+    item_index = 0
 
     for blob in batches:
         try:
-            yield from validate_list(blob)
+            validated = validate_list(blob)
         except ValidationError:
             items, _, _ = extract_array_items(blob, is_start=True)
-            for item_bytes in items:
-                yield validate(item_bytes)
+            for batch_index, item_bytes in enumerate(items):
+                try:
+                    yield validate(item_bytes)
+                except ValidationError as exc:
+                    raise _recontext_stream_validation_error(
+                        exc,
+                        item_index=item_index + batch_index,
+                        root_prefix=root_prefix,
+                    ) from exc
+            item_index += len(items)
+        else:
+            item_index += len(validated)
+            yield from validated
 
 
 async def _validate_json_blob_batches_aiter(
     batches: AsyncIterator[bytes],
     adapter: TypeAdapter[T],
     list_adapter: TypeAdapter[list[T]],
+    *,
+    root_prefix: str | None = None,
 ) -> AsyncIterator[T]:
     validate = adapter.validate_json
     validate_list = list_adapter.validate_json
+    item_index = 0
 
     async for blob in batches:
         try:
-            for item in validate_list(blob):
-                yield item
+            validated = validate_list(blob)
         except ValidationError:
             items, _, _ = extract_array_items(blob, is_start=True)
-            for item_bytes in items:
-                yield validate(item_bytes)
+            for batch_index, item_bytes in enumerate(items):
+                try:
+                    yield validate(item_bytes)
+                except ValidationError as exc:
+                    raise _recontext_stream_validation_error(
+                        exc,
+                        item_index=item_index + batch_index,
+                        root_prefix=root_prefix,
+                    ) from exc
+            item_index += len(items)
+        else:
+            item_index += len(validated)
+            for item in validated:
+                yield item
 
 
 def _validate_json_item_batches_iter(

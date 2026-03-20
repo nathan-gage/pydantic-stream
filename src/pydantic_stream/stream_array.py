@@ -47,6 +47,7 @@ class StreamArray(Generic[T]):
                 ),
                 self._adapter,
                 self._list_adapter,
+                root_prefix=self._prefix,
             )
             return
 

@@ -25,45 +25,80 @@ Pydantic's `extra="ignore"` parses unknown fields into Python objects, then disc
 
 ## API
 
+Keep the public story mixin-first:
+
 ```python
-import json
-
 from pydantic import BaseModel
-from pydantic_stream import (
-    StreamingBaseModelMixin,
-    stream_projected_json_array_iter,
-)
+from pydantic_stream import StreamingBaseModelMixin
 
-class MyModel(StreamingBaseModelMixin, BaseModel):
-    id: int
-    name: str
+class Page(StreamingBaseModelMixin, BaseModel):
+    number: int
+    width: float
 
-obj = MyModel.stream_model_validate_json(huge_bytes)                # single object
-arr = MyModel.stream_model_validate_json_array(huge_bytes)          # array → StreamArray
-for item in MyModel.stream_model_validate_json_array_iter(body):    # top-level array → lazy iter
+page = Page.stream_model_validate_json(page_bytes)
+
+for page in Page.stream_model_validate_json_array_iter(array_body):
     ...
-for item in MyModel.stream_model_validate_json_array_iter(          # nested array → lazy iter
+
+async for page in Page.stream_model_validate_json_array_aiter(async_array_body):
+    ...
+```
+
+### Top-level array vs nested array
+
+Top-level array input works directly:
+
+```json
+[ ... ]
+```
+
+```python
+for page in Page.stream_model_validate_json_array_iter(body):
+    ...
+```
+
+Document-envelope input uses `root_prefix` to target the nested array:
+
+```json
+{ "pages": [ ... ] }
+```
+
+```python
+async for page in Page.stream_model_validate_json_array_aiter(
     body,
-    root_prefix="data.results",
-):
-    ...
-async for item in MyModel.stream_model_validate_json_array_aiter(
-    abody,
     root_prefix="pages",
 ):
     ...
+```
+
+This is the common “large document object with one dominant nested array” case.
+`root_prefix` also supports dotted paths such as `"data.results"`.
+
+When streamed validation fails, the raised `ValidationError` includes the streamed
+array item index in its location, and prefixed iterators also include the
+`root_prefix` context.
+
+### Advanced: projected-item escape hatch
+
+If you want the projection machinery without model instances, there is also a
+narrow public escape hatch:
+
+```python
+import json
+
+from pydantic_stream import stream_projected_json_array_iter
+
 for item in stream_projected_json_array_iter(
     body,
-    MyModel._streaming_spec(),
+    Page._streaming_spec(),
     json.loads,
     root_prefix="pages",
 ):
     ...
-for item in MyModel.stream_model_validate_jsonl_iter(b):            # JSONL → lazy iter
-    ...
 ```
 
-`root_prefix` lets the streaming iterators target a nested array inside a document envelope, and `stream_projected_json_array_iter(...)` / `..._aiter(...)` expose the same projected-item primitive for non-model consumers.
+This is useful for lightweight dict/TypedDict-style consumers, but the primary
+public API remains the mixin methods above.
 
 `StreamingDataclassMixin` provides the same API for `@pydantic.dataclasses.dataclass` (methods are `stream_validate_*` instead of `stream_model_validate_*`).
 

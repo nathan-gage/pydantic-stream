@@ -176,8 +176,12 @@ class TestStreamArrayRootPrefix:
         first = next(iterator)
         assert first.id == 1
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             next(iterator)
+
+        error = exc_info.value.errors(include_url=False)[0]
+        assert error["loc"][:2] == ("items", 1)
+        assert "array item 1 under root_prefix 'items'" in str(exc_info.value)
 
 
 class TestStreamArrayRepr:

@@ -292,8 +292,12 @@ class TestStreamValidateJsonArrayIter:
         first = next(iterator)
         assert first.id == 1
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationError) as exc_info:
             next(iterator)
+
+        error = exc_info.value.errors(include_url=False)[0]
+        assert error["loc"][0] == 1
+        assert "array item 1" in str(exc_info.value)
 
 
 class TestCallableSource:

@@ -115,6 +115,7 @@ class StreamingDataclassMixin:
             ),
             adapter,
             list_adapter,
+            root_prefix=root_prefix,
         )
 
     @classmethod
@@ -139,6 +140,7 @@ class StreamingDataclassMixin:
             ),
             adapter,
             list_adapter,
+            root_prefix=root_prefix,
         ):
             yield item
 
