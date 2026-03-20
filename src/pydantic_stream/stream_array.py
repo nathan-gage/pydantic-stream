@@ -7,6 +7,7 @@ from pydantic import TypeAdapter
 from pydantic_core import ValidationError
 
 from ._native import ObjectSpec, extract_array_items, project_array_items_sliced, project_array_nav
+from ._streaming import stream_projected_json_array_iter
 
 T = TypeVar("T")
 
@@ -34,6 +35,15 @@ class StreamArray(Generic[T]):
         self._prefix = root_prefix
 
     def __iter__(self) -> Iterator[T]:
+        if self._prefix:
+            yield from stream_projected_json_array_iter(
+                self._data,
+                self._spec,
+                self._adapter.validate_json,
+                root_prefix=self._prefix,
+            )
+            return
+
         # Fast path: project the entire array into one compact blob (single Rust
         # allocation), then validate everything in one pydantic-core call.
         # For the common case of valid data this avoids N per-item Vec<u8>

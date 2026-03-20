@@ -38,6 +38,22 @@ fn extract_array_items(
     }
 }
 
+/// Locate the `[` byte offset for a top-level or prefixed JSON array.
+#[pyfunction]
+#[pyo3(signature = (data, prefix=None))]
+fn locate_array_start(data: &[u8], prefix: Option<&str>) -> PyResult<Option<usize>> {
+    let segments: Vec<&str> = match prefix {
+        Some(p) if !p.is_empty() => p.split('.').collect(),
+        _ => Vec::new(),
+    };
+
+    let result = pydantic_stream_core::streaming::locate_array_start(data, &segments);
+    match result {
+        Ok(offset) => Ok(offset),
+        Err(e) => Err(StreamingProjectionError::new_err(e.message)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Projection functions (require ObjectSpec)
 // ---------------------------------------------------------------------------
@@ -196,6 +212,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Streaming (no spec)
     m.add_function(wrap_pyfunction!(extract_array_items, m)?)?;
+    m.add_function(wrap_pyfunction!(locate_array_start, m)?)?;
 
     // Projection (requires spec)
     m.add_function(wrap_pyfunction!(project_array, m)?)?;

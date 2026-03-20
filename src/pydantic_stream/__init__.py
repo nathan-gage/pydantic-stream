@@ -14,7 +14,11 @@ from ._native import (
     project_object,
 )
 from ._schema import compile_model_spec, compile_object_spec
-from ._streaming import stream_json_array
+from ._streaming import (
+    stream_json_array,
+    stream_projected_json_array_aiter,
+    stream_projected_json_array_iter,
+)
 from .base_model import StreamableModel, StreamingBaseModelMixin
 from .dataclass import Streamable, StreamingDataclassMixin
 from .stream_array import StreamArray
@@ -39,4 +43,6 @@ __all__ = [
     "project_jsonl",
     "project_object",
     "stream_json_array",
+    "stream_projected_json_array_aiter",
+    "stream_projected_json_array_iter",
 ]

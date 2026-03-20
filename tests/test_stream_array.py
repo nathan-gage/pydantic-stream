@@ -154,6 +154,18 @@ class TestStreamArrayRootPrefix:
         result = sa[1:3]
         assert [item.id for item in result] == [1, 2]
 
+    def test_root_prefix_iter_does_not_use_bulk_nav(
+        self, monkeypatch: pytest.MonkeyPatch, user_case: StreamableCase
+    ) -> None:
+        data = {"items": [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]}
+        sa = _stream_array(user_case, data, root_prefix="items")
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise AssertionError("project_array_nav should not be used for prefixed iteration")
+
+        monkeypatch.setattr("pydantic_stream.stream_array.project_array_nav", fail)
+        assert [item.id for item in sa] == [1, 2]
+
 
 class TestStreamArrayRepr:
     def test_repr_shows_byte_count(self, user_case: StreamableCase) -> None:

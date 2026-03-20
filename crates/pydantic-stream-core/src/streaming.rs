@@ -172,6 +172,110 @@ pub fn navigate_to_prefix(jiter: &mut Jiter<'_>, segments: &[&str]) -> Result<()
     Ok(())
 }
 
+/// Locate the byte offset of the JSON array to stream.
+///
+/// When `prefix` is empty this expects a top-level array. Otherwise it
+/// incrementally navigates through nested object keys and returns the byte
+/// offset of the `[` for the target array value.
+///
+/// Returns `Ok(None)` when more input is needed to reach or confirm the array
+/// start. This is the key primitive used by prefix-aware streaming iterators.
+pub fn locate_array_start(input: &[u8], prefix: &[&str]) -> Result<Option<usize>, StreamError> {
+    let mut jiter = Jiter::new(input);
+
+    if prefix.is_empty() {
+        let peek = match jiter.peek() {
+            Ok(peek) => peek,
+            Err(e) if is_partial_error(&e) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        if peek != Peek::Array {
+            return Err(StreamError::new(format!(
+                "Expected a JSON array, got {peek:?}"
+            )));
+        }
+
+        return Ok(Some(jiter.current_index()));
+    }
+
+    for &segment in prefix {
+        let peek = match jiter.peek() {
+            Ok(peek) => peek,
+            Err(e) if is_partial_error(&e) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        if peek != Peek::Object {
+            return Err(StreamError::new(format!(
+                "Expected a JSON object at prefix segment {segment:?}, got {peek:?}"
+            )));
+        }
+
+        let first_key = match jiter.known_object() {
+            Ok(first_key) => first_key,
+            Err(e) if is_partial_error(&e) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+
+        let mut found = false;
+
+        if let Some(key) = first_key {
+            let key_owned = key.to_string();
+            if key_owned == segment {
+                found = true;
+            } else {
+                match jiter.next_skip() {
+                    Ok(()) => {}
+                    Err(e) if is_partial_error(&e) => return Ok(None),
+                    Err(e) => return Err(e.into()),
+                }
+
+                loop {
+                    match jiter.next_key() {
+                        Ok(Some(key)) => {
+                            let key_owned = key.to_string();
+                            if key_owned == segment {
+                                found = true;
+                                break;
+                            }
+                            match jiter.next_skip() {
+                                Ok(()) => {}
+                                Err(e) if is_partial_error(&e) => return Ok(None),
+                                Err(e) => return Err(e.into()),
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) if is_partial_error(&e) => return Ok(None),
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+            }
+        }
+
+        if !found {
+            return Err(StreamError::new(format!(
+                "Prefix key {segment:?} not found in JSON object"
+            )));
+        }
+    }
+
+    let array_start = jiter.current_index();
+    let peek = match jiter.peek() {
+        Ok(peek) => peek,
+        Err(e) if is_partial_error(&e) => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    if peek != Peek::Array {
+        return Err(StreamError::new(format!(
+            "Expected a JSON array, got {peek:?}"
+        )));
+    }
+
+    Ok(Some(array_start))
+}
+
 /// Trim ASCII whitespace from both ends of a byte slice.
 #[must_use]
 pub fn trim_ascii(s: &[u8]) -> &[u8] {
@@ -361,6 +465,50 @@ mod tests {
             .message
             .contains("Expected a JSON object at prefix segment"));
         assert!(err.message.contains("items"));
+    }
+
+    #[test]
+    fn locate_array_start_for_top_level_array() {
+        let input = br#"  [{"x":1}]"#;
+        let start = locate_array_start(input, &[]).unwrap();
+        assert_eq!(start, Some(2));
+    }
+
+    #[test]
+    fn locate_array_start_for_nested_prefix() {
+        let input = br#"{"meta":0,"outer":{"items":[{"x":1}]}}"#;
+        let start = locate_array_start(input, &["outer", "items"]).unwrap();
+        assert_eq!(start, Some(27));
+        assert_eq!(input[start.unwrap()], b'[');
+    }
+
+    #[test]
+    fn locate_array_start_returns_none_for_partial_prefix() {
+        let input = br#"{"outer":{"items""#;
+        let start = locate_array_start(input, &["outer", "items"]).unwrap();
+        assert_eq!(start, None);
+    }
+
+    #[test]
+    fn locate_array_start_returns_none_for_partial_array_value() {
+        let input = br#"{"outer":{"items": "#;
+        let start = locate_array_start(input, &["outer", "items"]).unwrap();
+        assert_eq!(start, None);
+    }
+
+    #[test]
+    fn locate_array_start_reports_missing_key() {
+        let input = br#"{"outer":{"present":[]}}"#;
+        let err = locate_array_start(input, &["outer", "missing"]).unwrap_err();
+        assert!(err.message.contains("Prefix key"));
+        assert!(err.message.contains("missing"));
+    }
+
+    #[test]
+    fn locate_array_start_reports_non_array_target() {
+        let input = br#"{"outer":{"items":{}}}"#;
+        let err = locate_array_start(input, &["outer", "items"]).unwrap_err();
+        assert!(err.message.contains("Expected a JSON array"));
     }
 
     #[test]

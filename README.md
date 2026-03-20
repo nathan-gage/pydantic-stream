@@ -26,20 +26,44 @@ Pydantic's `extra="ignore"` parses unknown fields into Python objects, then disc
 ## API
 
 ```python
+import json
+
 from pydantic import BaseModel
-from pydantic_stream import StreamingBaseModelMixin
+from pydantic_stream import (
+    StreamingBaseModelMixin,
+    stream_projected_json_array_iter,
+)
 
 class MyModel(StreamingBaseModelMixin, BaseModel):
     id: int
     name: str
 
-obj = MyModel.stream_model_validate_json(huge_bytes)           # single object
-arr = MyModel.stream_model_validate_json_array(huge_bytes)      # array → StreamArray
-for item in MyModel.stream_model_validate_json_array_iter(b):   # array → lazy iter
+obj = MyModel.stream_model_validate_json(huge_bytes)                # single object
+arr = MyModel.stream_model_validate_json_array(huge_bytes)          # array → StreamArray
+for item in MyModel.stream_model_validate_json_array_iter(body):    # top-level array → lazy iter
     ...
-for item in MyModel.stream_model_validate_jsonl_iter(b):        # JSONL → lazy iter
+for item in MyModel.stream_model_validate_json_array_iter(          # nested array → lazy iter
+    body,
+    root_prefix="data.results",
+):
+    ...
+async for item in MyModel.stream_model_validate_json_array_aiter(
+    abody,
+    root_prefix="pages",
+):
+    ...
+for item in stream_projected_json_array_iter(
+    body,
+    MyModel._streaming_spec(),
+    json.loads,
+    root_prefix="pages",
+):
+    ...
+for item in MyModel.stream_model_validate_jsonl_iter(b):            # JSONL → lazy iter
     ...
 ```
+
+`root_prefix` lets the streaming iterators target a nested array inside a document envelope, and `stream_projected_json_array_iter(...)` / `..._aiter(...)` expose the same projected-item primitive for non-model consumers.
 
 `StreamingDataclassMixin` provides the same API for `@pydantic.dataclasses.dataclass` (methods are `stream_validate_*` instead of `stream_model_validate_*`).
 

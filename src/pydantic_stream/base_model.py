@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any, ClassVar, Self, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import ValidationError
 
-from ._native import (
-    ObjectSpec,
-    StreamingProjectionError,
-    project_array_items_partial,
-    project_jsonl,
-    project_object,
-)
+from ._native import ObjectSpec, StreamingProjectionError, project_jsonl, project_object
 from ._schema import compile_model_spec
+from ._streaming import stream_projected_json_array_aiter, stream_projected_json_array_iter
 from .stream_array import StreamArray
 
 StreamableModel = TypeVar("StreamableModel", bound="StreamingBaseModelMixin")
@@ -150,52 +145,41 @@ class StreamingBaseModelMixin(BaseModel):
         cls: type[StreamableModel],
         source: Any,
         *,
+        root_prefix: str | None = None,
         chunk_size: int = 1_048_576,
     ) -> Iterator[StreamableModel]:
-        """Stream-validate a JSON array of objects in bounded memory.
-
-        Uses combined streaming + projection for maximum efficiency.
-        """
+        """Stream-validate a top-level or prefixed JSON array in bounded memory."""
         adapter = cls._streaming_adapter()
         spec = cls._streaming_spec()
 
-        if hasattr(source, "read"):
-            chunks: Iterator[bytes] = iter(lambda: source.read(chunk_size), b"")
-        else:
-            chunks = iter(source)
+        yield from stream_projected_json_array_iter(
+            source,
+            spec,
+            adapter.validate_json,
+            root_prefix=root_prefix,
+            chunk_size=chunk_size,
+        )
 
-        buffer = bytearray()
-        is_start = True
-        saw_input = False
+    @classmethod
+    async def stream_model_validate_json_array_aiter(
+        cls: type[StreamableModel],
+        source: Any,
+        *,
+        root_prefix: str | None = None,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[StreamableModel]:
+        """Async stream-validate a top-level or prefixed JSON array."""
+        adapter = cls._streaming_adapter()
+        spec = cls._streaming_spec()
 
-        for chunk in chunks:
-            if not chunk:
-                continue
-            saw_input = True
-            buffer.extend(chunk)
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
-            del buffer[:consumed]
-            is_start = False
-            if finished:
-                if _has_trailing_array_content(bytes(buffer), chunks):
-                    raise StreamingProjectionError("Trailing content after JSON array")
-                return
-
-        if saw_input and not buffer:
-            raise StreamingProjectionError("Unexpected end of JSON array")
-
-        # Drain remaining buffer
-        if buffer:
-            items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-            for item_bytes in items:
-                yield adapter.validate_json(item_bytes)
-            del buffer[:consumed]
-            if not finished:
-                raise StreamingProjectionError("Unexpected end of JSON array")
-            if bytes(buffer).strip():
-                raise StreamingProjectionError("Trailing content after JSON array")
+        async for item in stream_projected_json_array_aiter(
+            source,
+            spec,
+            adapter.validate_json,
+            root_prefix=root_prefix,
+            chunk_size=chunk_size,
+        ):
+            yield item
 
     @classmethod
     def stream_model_validate_jsonl_iter(
