@@ -630,6 +630,18 @@ pub struct PartialProjectionResult {
     pub finished: bool,
 }
 
+/// Result of projecting complete items from a partial JSON array buffer into
+/// a single concatenated JSON array.
+#[derive(Debug)]
+pub struct PartialProjectionBlobResult {
+    /// Concatenated projected items as a JSON array blob.
+    pub blob: Vec<u8>,
+    /// Number of bytes consumed from the input.
+    pub consumed: usize,
+    /// Whether the closing `]` was reached.
+    pub finished: bool,
+}
+
 /// Process a (possibly incomplete) chunk of a top-level JSON array,
 /// projecting each complete object item.
 ///
@@ -692,15 +704,109 @@ pub fn project_array_items_partial(
             b'{' => {
                 let slice = &input[pos..];
                 let mut jiter = Jiter::new(slice);
-                match project_object_from_current::<true, false>(&mut jiter, slice, spec) {
+                match project_object_from_current::<true, true>(&mut jiter, slice, spec) {
                     Ok(projected) => {
-                        let obj_end = pos + jiter.current_index();
+                        let obj_end = pos + jiter_abs_pos(&jiter, slice);
                         items.push(projected);
                         pos = obj_end;
                     }
                     Err(e) if is_partial_error(&e) => {
                         return Ok(PartialProjectionResult {
                             items,
+                            consumed: pos,
+                            finished: false,
+                        });
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            other => {
+                return Err(StreamError::new(format!(
+                    "Expected object in array, got {:?}",
+                    other as char
+                )));
+            }
+        }
+    }
+}
+
+/// Process a (possibly incomplete) chunk of a top-level JSON array,
+/// projecting each complete object item into a single concatenated JSON array.
+pub fn project_array_blob_partial(
+    input: &[u8],
+    spec: &ObjectSpec,
+    is_start: bool,
+) -> Result<PartialProjectionBlobResult, StreamError> {
+    use crate::streaming::is_partial_error;
+
+    let mut pos: usize = 0;
+    let len = input.len();
+    let mut blob = Vec::with_capacity((input.len() / 10).min(65_536));
+    let mut first_item = true;
+
+    skip_ws(input, &mut pos);
+
+    if is_start {
+        if pos >= len {
+            blob.extend_from_slice(b"[]");
+            return Ok(PartialProjectionBlobResult {
+                blob,
+                consumed: 0,
+                finished: false,
+            });
+        }
+        if input[pos] != b'[' {
+            return Err(StreamError::new(format!(
+                "Expected '[', got {:?}",
+                input[pos] as char
+            )));
+        }
+        pos += 1;
+    }
+
+    blob.push(b'[');
+
+    loop {
+        skip_ws(input, &mut pos);
+        if pos >= len {
+            blob.push(b']');
+            return Ok(PartialProjectionBlobResult {
+                blob,
+                consumed: pos,
+                finished: false,
+            });
+        }
+
+        match input[pos] {
+            b']' => {
+                blob.push(b']');
+                return Ok(PartialProjectionBlobResult {
+                    blob,
+                    consumed: pos + 1,
+                    finished: true,
+                });
+            }
+            b',' => {
+                pos += 1;
+            }
+            b'{' => {
+                let slice = &input[pos..];
+                let mut jiter = Jiter::new(slice);
+                let blob_len_before_item = blob.len();
+                if !first_item {
+                    blob.push(b',');
+                }
+                match project_object_inner::<true, true>(&mut jiter, slice, spec, &mut blob) {
+                    Ok(()) => {
+                        let obj_end = pos + jiter_abs_pos(&jiter, slice);
+                        pos = obj_end;
+                        first_item = false;
+                    }
+                    Err(e) if is_partial_error(&e) => {
+                        blob.truncate(blob_len_before_item);
+                        blob.push(b']');
+                        return Ok(PartialProjectionBlobResult {
+                            blob,
                             consumed: pos,
                             finished: false,
                         });
@@ -1373,5 +1479,36 @@ mod tests {
         let err = project_array_items_partial(b"[1]", &s, true).unwrap_err();
 
         assert!(err.message.contains("Expected object in array"));
+    }
+
+    #[test]
+    fn partial_blob_complete_array() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = b"[{\"x\":1,\"y\":9},{\"x\":2}]";
+        let result = project_array_blob_partial(input, &s, true).unwrap();
+        assert!(result.finished);
+        assert_eq!(result.consumed, input.len());
+        assert_eq!(parse(&result.blob), serde_json::json!([{"x": 1}, {"x": 2}]));
+    }
+
+    #[test]
+    fn partial_blob_incomplete_array() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = b"[{\"x\":1},{\"x\":";
+        let result = project_array_blob_partial(input, &s, true).unwrap();
+        assert!(!result.finished);
+        assert_eq!(result.consumed, 9);
+        assert_eq!(parse(&result.blob), serde_json::json!([{"x": 1}]));
+    }
+
+    #[test]
+    fn partial_blob_incomplete_unknown_field_returns_empty_blob() {
+        let s = mk_spec(&[("x", field("x"))]);
+        let input = br#"[{"x":1,"skip":{"nested":1"#;
+        let result = project_array_blob_partial(input, &s, true).unwrap();
+
+        assert!(!result.finished);
+        assert_eq!(result.consumed, 1);
+        assert_eq!(parse(&result.blob), serde_json::json!([]));
     }
 }

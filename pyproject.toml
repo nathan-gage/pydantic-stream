@@ -1,6 +1,6 @@
 [project]
 name = "pydantic-stream"
-version = "0.2.0"
+version = "0.3.0"
 description = "Rust-accelerated JSON streaming and projection for pydantic"
 readme = "README.md"
 license = "MIT"

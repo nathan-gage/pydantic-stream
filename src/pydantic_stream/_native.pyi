@@ -13,6 +13,7 @@ class FieldSpec:
     def output_key(self) -> str: ...
     def __repr__(self) -> str: ...
 
+
 class ObjectSpec:
     """Maps input JSON keys to their :class:`FieldSpec` entries."""
 
@@ -21,10 +22,20 @@ class ObjectSpec:
     def __len__(self) -> int: ...
     def __contains__(self, key: str) -> bool: ...
 
+
+class ProjectedArrayBlobStreamer:
+    """Incrementally project a top-level or prefixed JSON array."""
+
+    def __init__(self, spec: ObjectSpec, prefix: str | None = None) -> None: ...
+    def push(self, chunk: bytes) -> bytes | None: ...
+    def finish(self) -> bytes | None: ...
+
+
 class StreamingProjectionError(RuntimeError):
     """Raised when the input JSON or schema shape is unsupported."""
 
     ...
+
 
 # ---------------------------------------------------------------------------
 # Streaming — no field filtering required
@@ -42,6 +53,15 @@ def extract_array_items(
     """
     ...
 
+
+def locate_array_start(
+    data: bytes,
+    prefix: str | None = None,
+) -> int | None:
+    """Return the byte offset of the ``[`` for a top-level or prefixed array."""
+    ...
+
+
 def validate_raw_array_items(
     data: bytes,
     validator: Callable[[bytes], Any],
@@ -52,6 +72,7 @@ def validate_raw_array_items(
         ``(validated_items, first_error_or_None)``.
     """
     ...
+
 
 def validate_raw_array_item_next(
     data: bytes,
@@ -66,6 +87,7 @@ def validate_raw_array_item_next(
     """
     ...
 
+
 # ---------------------------------------------------------------------------
 # Field filtering — require ObjectSpec
 # ---------------------------------------------------------------------------
@@ -74,13 +96,16 @@ def project_object(data: bytes, spec: ObjectSpec) -> bytes:
     """Return a JSON object containing only the fields described by ``spec``."""
     ...
 
+
 def project_array(data: bytes, spec: ObjectSpec) -> bytes:
     """Apply ``spec`` to each object in a JSON array and return the array."""
     ...
 
+
 def project_array_items(data: bytes, spec: ObjectSpec) -> list[bytes]:
     """Return one filtered JSON object per item in a JSON array."""
     ...
+
 
 def project_array_item_at(
     data: bytes,
@@ -96,6 +121,7 @@ def project_array_item_at(
     """
     ...
 
+
 def project_array_nav(
     data: bytes,
     spec: ObjectSpec,
@@ -107,6 +133,7 @@ def project_array_nav(
         prefix: Dot-separated path to the array, e.g. ``"data.items"``.
     """
     ...
+
 
 def project_array_items_sliced(
     data: bytes,
@@ -126,6 +153,7 @@ def project_array_items_sliced(
     """
     ...
 
+
 def project_array_items_partial(
     data: bytes,
     spec: ObjectSpec,
@@ -138,9 +166,20 @@ def project_array_items_partial(
     """
     ...
 
+
+def project_array_blob_partial(
+    data: bytes,
+    spec: ObjectSpec,
+    is_start: bool = True,
+) -> tuple[bytes, int, bool]:
+    """Project one possibly partial array chunk into one compact array blob."""
+    ...
+
+
 def project_jsonl(data: bytes, spec: ObjectSpec) -> list[bytes]:
     """Apply ``spec`` to each record in JSON Lines input."""
     ...
+
 
 # ---------------------------------------------------------------------------
 # Field filtering + validation — require ObjectSpec and a validator callable
@@ -158,6 +197,7 @@ def validate_array_items(
     """
     ...
 
+
 def validate_array_item_next(
     data: bytes,
     spec: ObjectSpec,
@@ -171,6 +211,7 @@ def validate_array_item_next(
         ``(item_or_None, next_pos, finished)``.
     """
     ...
+
 
 def validate_array_items_next_batch(
     data: bytes,
@@ -187,6 +228,7 @@ def validate_array_items_next_batch(
     """
     ...
 
+
 def validate_array_items_batched(
     data: bytes,
     spec: ObjectSpec,
@@ -194,12 +236,12 @@ def validate_array_items_batched(
     list_validator: Callable[[bytes], Any],
     batch_size: int = 16,
 ) -> tuple[list[Any], BaseException | None]:
-    """Filter all items then validate in batches. Falls back to per-item on batch failure.
+    """Filter all items then validate in batches.
 
-    Returns:
-        ``(validated_items, first_error_or_None)``.
+    Falls back to per-item validation inside a failing batch.
     """
     ...
+
 
 def validate_array_nav(
     data: bytes,
@@ -213,6 +255,7 @@ def validate_array_nav(
         prefix: Dot-separated path to the array, e.g. ``"data.items"``.
     """
     ...
+
 
 def validate_array_items_partial(
     data: bytes,

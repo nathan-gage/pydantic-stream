@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_core import ValidationError
 
 from pydantic_stream import StreamingProjectionError
 
@@ -153,6 +154,34 @@ class TestStreamArrayRootPrefix:
         sa = _stream_array(user_case, data, root_prefix="items")
         result = sa[1:3]
         assert [item.id for item in result] == [1, 2]
+
+    def test_root_prefix_iter_does_not_use_bulk_nav(
+        self, monkeypatch: pytest.MonkeyPatch, user_case: StreamableCase
+    ) -> None:
+        data = {"items": [{"id": 1, "name": "Ada"}, {"id": 2, "name": "Grace"}]}
+        sa = _stream_array(user_case, data, root_prefix="items")
+
+        def fail(*args: object, **kwargs: object) -> object:
+            raise AssertionError("project_array_nav should not be used for prefixed iteration")
+
+        monkeypatch.setattr("pydantic_stream.stream_array.project_array_nav", fail)
+        assert [item.id for item in sa] == [1, 2]
+
+    def test_root_prefix_validation_fallback_preserves_itemwise_semantics(
+        self, user_case: StreamableCase
+    ) -> None:
+        data = {"items": [{"id": 1, "name": "Ada"}, {"id": "bad", "name": "Grace"}]}
+        iterator = iter(_stream_array(user_case, data, root_prefix="items"))
+
+        first = next(iterator)
+        assert first.id == 1
+
+        with pytest.raises(ValidationError) as exc_info:
+            next(iterator)
+
+        error = exc_info.value.errors(include_url=False)[0]
+        assert error["loc"][:2] == ("items", 1)
+        assert "array item 1 under root_prefix 'items'" in str(exc_info.value)
 
 
 class TestStreamArrayRepr:

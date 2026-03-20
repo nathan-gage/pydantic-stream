@@ -18,12 +18,13 @@ from ._native import (
     validate_raw_array_item_next,
     validate_raw_array_items,
 )
+from ._streaming import (
+    _stream_projected_json_array_blob_batches_iter,
+    _validate_json_blob_batches_iter,
+)
 
 T = TypeVar("T")
 
-# For smaller inputs, item-by-item iteration cuts peak memory substantially by
-# avoiding an additional compacted array blob. Very small arrays that do not
-# need projection can optionally validate raw item bytes directly.
 _ITER_ITEMWISE_BYTES_THRESHOLD = 256 * 1024
 _RAW_ITEMWISE_BYTES_THRESHOLD = 128 * 1024
 _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD = 128 * 1024
@@ -69,9 +70,10 @@ def _iter_validated_raw_array_items(data: Any, validator: Any) -> Iterator[T]:
 
 
 class StreamArray(Generic[T]):
-    """Lazy, indexable view over a JSON array.
+    """Lazy view over a projected JSON array.
 
-    Supports iteration, indexing, slicing, and :meth:`to_list`.
+    Supports iteration, indexing, slicing, and ``to_list()`` without eagerly
+    validating the entire array up front.
     """
 
     __slots__ = (
@@ -95,17 +97,6 @@ class StreamArray(Generic[T]):
         prefer_itemwise_iter: bool = False,
         allow_raw_small_iter: bool = False,
     ) -> None:
-        """Args:
-        data: Raw JSON bytes containing the array.
-        spec: Field mapping for the item type.
-        adapter: ``TypeAdapter[T]`` for per-item validation.
-        list_adapter: ``TypeAdapter[list[T]]`` for bulk validation.
-        root_prefix: Dot-separated path to the array, e.g. ``"data.items"``.
-            ``None`` for a top-level array.
-        prefer_itemwise_iter: Validate one item at a time while iterating.
-        allow_raw_small_iter: Skip field filtering for small arrays when
-            the item type accepts extra fields.
-        """
         self._data = data if isinstance(data, bytes) else bytes(data)
         self._spec = spec
         self._adapter = adapter
@@ -115,28 +106,28 @@ class StreamArray(Generic[T]):
         self._allow_raw_small_iter = allow_raw_small_iter
 
     def __iter__(self) -> Iterator[T]:
-        # Iteration is the memory-sensitive path (e.g. ``list(stream_array)``).
-        # For smaller top-level inputs, validate projected items one-by-one so
-        # we do not keep an additional compacted array blob alive alongside the
-        # final result objects. Larger inputs keep the faster bulk-validation
-        # path and only fall back to per-item validation on errors to preserve
-        # error locations and "yield valid items until the first error"
-        # semantics.
+        """Iterate over validated items on demand."""
+        if self._prefix is not None:
+            return _validate_json_blob_batches_iter(
+                _stream_projected_json_array_blob_batches_iter(
+                    self._data,
+                    self._spec,
+                    root_prefix=self._prefix,
+                ),
+                self._adapter,
+                self._list_adapter,
+                root_prefix=self._prefix,
+            )
+
         fast_validate = self._adapter.validator.validate_json
         data_len = len(self._data)
-        if (
-            self._prefix is None
-            and self._allow_raw_small_iter
-            and data_len <= _RAW_ITEMWISE_BYTES_THRESHOLD
-        ):
+        if self._allow_raw_small_iter and data_len <= _RAW_ITEMWISE_BYTES_THRESHOLD:
             if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
                 items, error = validate_raw_array_items(self._data, fast_validate)
                 return iter(items) if error is None else _iter_items_then_raise(items, error)
             return _iter_validated_raw_array_items(self._data, fast_validate)
 
-        if self._prefix is None and (
-            self._prefer_itemwise_iter or data_len <= _ITER_ITEMWISE_BYTES_THRESHOLD
-        ):
+        if self._prefer_itemwise_iter or data_len <= _ITER_ITEMWISE_BYTES_THRESHOLD:
             if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
                 items, error = validate_array_items(self._data, self._spec, fast_validate)
                 return iter(items) if error is None else _iter_items_then_raise(items, error)
@@ -157,10 +148,9 @@ class StreamArray(Generic[T]):
     def __getitem__(self, index: slice) -> list[T]: ...
 
     def __getitem__(self, index: int | slice) -> T | list[T]:
-        """Return one item or a list for a slice. Negative indexes are not supported.
+        """Return one validated item, or a validated list for a slice.
 
-        Raises:
-            IndexError: If the index is negative or out of range.
+        Negative indices and negative slice steps are not supported.
         """
         if isinstance(index, slice):
             start, stop, step = index.start, index.stop, index.step
@@ -181,7 +171,7 @@ class StreamArray(Generic[T]):
                 step or 1,
             )
             validate = self._adapter.validator.validate_json
-            return [validate(b) for b in items]
+            return [validate(item) for item in items]
 
         if index < 0:
             raise IndexError("StreamArray does not support negative indexing")
@@ -191,7 +181,7 @@ class StreamArray(Generic[T]):
         return self._adapter.validator.validate_json(item)
 
     def to_list(self) -> list[T]:
-        """Validate the entire array and return the results as a list."""
+        """Materialize the whole array and validate it in one pass."""
         return validate_array_nav(
             self._data,
             self._spec,
