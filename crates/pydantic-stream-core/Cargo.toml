@@ -1,6 +1,6 @@
 [package]
 name = "pydantic-stream-core"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "JSON streaming and projection engine built on jiter"
 
