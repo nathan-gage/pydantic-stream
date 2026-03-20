@@ -8,6 +8,7 @@ from collections.abc import Iterator
 
 import pytest
 from pydantic import TypeAdapter
+from pydantic_core import ValidationError
 
 from pydantic_stream import (
     StreamingProjectionError,
@@ -281,6 +282,18 @@ class TestStreamValidateJsonArrayIter:
         data = _make_array_bytes([{"id": 1, "name": "Ada"}]) + b"garbage"
         with pytest.raises(StreamingProjectionError):
             list(user_case.stream_validate_json_array_iter(io.BytesIO(data), chunk_size=16))
+
+    def test_validation_fallback_preserves_itemwise_semantics(
+        self, user_case: StreamableCase
+    ) -> None:
+        data = _make_array_bytes([{"id": 1, "name": "Ada"}, {"id": "bad", "name": "Grace"}])
+        iterator = user_case.stream_validate_json_array_iter(io.BytesIO(data), chunk_size=4096)
+
+        first = next(iterator)
+        assert first.id == 1
+
+        with pytest.raises(ValidationError):
+            next(iterator)
 
 
 class TestCallableSource:

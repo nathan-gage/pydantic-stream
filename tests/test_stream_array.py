@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic_core import ValidationError
 
 from pydantic_stream import StreamingProjectionError
 
@@ -165,6 +166,18 @@ class TestStreamArrayRootPrefix:
 
         monkeypatch.setattr("pydantic_stream.stream_array.project_array_nav", fail)
         assert [item.id for item in sa] == [1, 2]
+
+    def test_root_prefix_validation_fallback_preserves_itemwise_semantics(
+        self, user_case: StreamableCase
+    ) -> None:
+        data = {"items": [{"id": 1, "name": "Ada"}, {"id": "bad", "name": "Grace"}]}
+        iterator = iter(_stream_array(user_case, data, root_prefix="items"))
+
+        first = next(iterator)
+        assert first.id == 1
+
+        with pytest.raises(ValidationError):
+            next(iterator)
 
 
 class TestStreamArrayRepr:

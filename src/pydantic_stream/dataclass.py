@@ -9,7 +9,12 @@ from pydantic_core import ValidationError
 
 from ._native import ObjectSpec, StreamingProjectionError, project_jsonl, project_object
 from ._schema import compile_object_spec
-from ._streaming import stream_projected_json_array_aiter, stream_projected_json_array_iter
+from ._streaming import (
+    _stream_projected_json_array_blob_batches_aiter,
+    _stream_projected_json_array_blob_batches_iter,
+    _validate_json_blob_batches_aiter,
+    _validate_json_blob_batches_iter,
+)
 from .base_model import _is_eager_source, _to_bytes, _to_bytes_jsonl
 from .stream_array import StreamArray
 
@@ -98,14 +103,18 @@ class StreamingDataclassMixin:
     ) -> Iterator[Streamable]:
         """Stream-validate a top-level or prefixed JSON array in bounded memory."""
         adapter = cls._streaming_adapter()
+        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        yield from stream_projected_json_array_iter(
-            source,
-            spec,
-            adapter.validate_json,
-            root_prefix=root_prefix,
-            chunk_size=chunk_size,
+        yield from _validate_json_blob_batches_iter(
+            _stream_projected_json_array_blob_batches_iter(
+                source,
+                spec,
+                root_prefix=root_prefix,
+                chunk_size=chunk_size,
+            ),
+            adapter,
+            list_adapter,
         )
 
     @classmethod
@@ -118,14 +127,18 @@ class StreamingDataclassMixin:
     ) -> AsyncIterator[Streamable]:
         """Async stream-validate a top-level or prefixed JSON array."""
         adapter = cls._streaming_adapter()
+        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        async for item in stream_projected_json_array_aiter(
-            source,
-            spec,
-            adapter.validate_json,
-            root_prefix=root_prefix,
-            chunk_size=chunk_size,
+        async for item in _validate_json_blob_batches_aiter(
+            _stream_projected_json_array_blob_batches_aiter(
+                source,
+                spec,
+                root_prefix=root_prefix,
+                chunk_size=chunk_size,
+            ),
+            adapter,
+            list_adapter,
         ):
             yield item
 

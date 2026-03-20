@@ -7,9 +7,11 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any, TypeVar
 
 from pydantic import TypeAdapter
+from pydantic_core import ValidationError
 
 from ._native import (
     ObjectSpec,
+    ProjectedArrayBlobStreamer,
     StreamingProjectionError,
     extract_array_items,
     locate_array_start,
@@ -17,6 +19,15 @@ from ._native import (
 )
 
 T = TypeVar("T")
+
+
+def _chunk_bytes(data: bytes, chunk_size: int) -> Iterator[bytes]:
+    if len(data) <= chunk_size:
+        yield data
+        return
+
+    for start in range(0, len(data), chunk_size):
+        yield data[start : start + chunk_size]
 
 
 def _coerce_bytes(value: Any, *, description: str) -> bytes:
@@ -34,7 +45,7 @@ def _coerce_bytes(value: Any, *, description: str) -> bytes:
 def _source_to_chunks(source: Any, chunk_size: int) -> Iterator[bytes]:
     """Normalize any sync source into an iterator of byte chunks."""
     if isinstance(source, (bytes, str, bytearray, memoryview)):
-        return iter((_coerce_bytes(source, description="source"),))
+        return _chunk_bytes(_coerce_bytes(source, description="source"), chunk_size)
 
     if callable(source):
         return _source_to_chunks(source(), chunk_size)
@@ -69,7 +80,8 @@ def _source_to_chunks(source: Any, chunk_size: int) -> Iterator[bytes]:
 async def _source_to_achunks(source: Any, chunk_size: int) -> AsyncIterator[bytes]:
     """Normalize any sync/async source into an async iterator of byte chunks."""
     if isinstance(source, (bytes, str, bytearray, memoryview)):
-        yield _coerce_bytes(source, description="source")
+        for chunk in _chunk_bytes(_coerce_bytes(source, description="source"), chunk_size):
+            yield chunk
         return
 
     if callable(source):
@@ -125,14 +137,14 @@ def _root_prefix_eof_error(root_prefix: str) -> StreamingProjectionError:
     )
 
 
-def _stream_projected_json_array_item_bytes_iter(
+def _stream_projected_json_array_item_batches_iter(
     source: Any,
     spec: ObjectSpec,
     *,
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
-) -> Iterator[bytes]:
-    """Yield projected item bytes from a top-level or prefixed JSON array."""
+) -> Iterator[list[bytes]]:
+    """Yield batches of projected item bytes from a top-level or prefixed JSON array."""
     chunks = _source_to_chunks(source, chunk_size)
     buffer = bytearray()
     is_start = True
@@ -154,8 +166,8 @@ def _stream_projected_json_array_item_bytes_iter(
             is_start = True
 
         items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-        for item_bytes in items:
-            yield item_bytes
+        if items:
+            yield items
         del buffer[:consumed]
         is_start = False
 
@@ -179,8 +191,8 @@ def _stream_projected_json_array_item_bytes_iter(
 
     if buffer:
         items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-        for item_bytes in items:
-            yield item_bytes
+        if items:
+            yield items
         del buffer[:consumed]
         if not finished:
             raise StreamingProjectionError("Unexpected end of JSON array")
@@ -188,14 +200,14 @@ def _stream_projected_json_array_item_bytes_iter(
             raise StreamingProjectionError("Trailing content after JSON array")
 
 
-async def _stream_projected_json_array_item_bytes_aiter(
+async def _stream_projected_json_array_item_batches_aiter(
     source: Any,
     spec: ObjectSpec,
     *,
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
-) -> AsyncIterator[bytes]:
-    """Async variant of _stream_projected_json_array_item_bytes_iter."""
+) -> AsyncIterator[list[bytes]]:
+    """Async variant of _stream_projected_json_array_item_batches_iter."""
     chunks = _source_to_achunks(source, chunk_size)
     buffer = bytearray()
     is_start = True
@@ -217,8 +229,8 @@ async def _stream_projected_json_array_item_bytes_aiter(
             is_start = True
 
         items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-        for item_bytes in items:
-            yield item_bytes
+        if items:
+            yield items
         del buffer[:consumed]
         is_start = False
 
@@ -242,13 +254,168 @@ async def _stream_projected_json_array_item_bytes_aiter(
 
     if buffer:
         items, consumed, finished = project_array_items_partial(bytes(buffer), spec, is_start)
-        for item_bytes in items:
-            yield item_bytes
+        if items:
+            yield items
         del buffer[:consumed]
         if not finished:
             raise StreamingProjectionError("Unexpected end of JSON array")
         if root_prefix is None and bytes(buffer).strip():
             raise StreamingProjectionError("Trailing content after JSON array")
+
+
+def _stream_projected_json_array_blob_batches_iter(
+    source: Any,
+    spec: ObjectSpec,
+    *,
+    root_prefix: str | None = None,
+    chunk_size: int = 1_048_576,
+) -> Iterator[bytes]:
+    """Yield projected JSON array blobs for each chunk of complete items."""
+    chunks = _source_to_chunks(source, chunk_size)
+    streamer = ProjectedArrayBlobStreamer(spec, root_prefix)
+
+    for chunk in chunks:
+        blob = streamer.push(chunk)
+        if blob is not None:
+            yield blob
+
+    blob = streamer.finish()
+    if blob is not None:
+        yield blob
+
+
+async def _stream_projected_json_array_blob_batches_aiter(
+    source: Any,
+    spec: ObjectSpec,
+    *,
+    root_prefix: str | None = None,
+    chunk_size: int = 1_048_576,
+) -> AsyncIterator[bytes]:
+    """Async variant of _stream_projected_json_array_blob_batches_iter."""
+    chunks = _source_to_achunks(source, chunk_size)
+    streamer = ProjectedArrayBlobStreamer(spec, root_prefix)
+
+    async for chunk in chunks:
+        blob = streamer.push(chunk)
+        if blob is not None:
+            yield blob
+
+    blob = streamer.finish()
+    if blob is not None:
+        yield blob
+
+
+def _stream_projected_json_array_item_bytes_iter(
+    source: Any,
+    spec: ObjectSpec,
+    *,
+    root_prefix: str | None = None,
+    chunk_size: int = 1_048_576,
+) -> Iterator[bytes]:
+    """Yield projected item bytes from a top-level or prefixed JSON array."""
+    for items in _stream_projected_json_array_item_batches_iter(
+        source,
+        spec,
+        root_prefix=root_prefix,
+        chunk_size=chunk_size,
+    ):
+        yield from items
+
+
+async def _stream_projected_json_array_item_bytes_aiter(
+    source: Any,
+    spec: ObjectSpec,
+    *,
+    root_prefix: str | None = None,
+    chunk_size: int = 1_048_576,
+) -> AsyncIterator[bytes]:
+    """Async variant of _stream_projected_json_array_item_bytes_iter."""
+    async for items in _stream_projected_json_array_item_batches_aiter(
+        source,
+        spec,
+        root_prefix=root_prefix,
+        chunk_size=chunk_size,
+    ):
+        for item_bytes in items:
+            yield item_bytes
+
+
+def _validate_json_blob_batches_iter(
+    batches: Iterator[bytes],
+    adapter: TypeAdapter[T],
+    list_adapter: TypeAdapter[list[T]],
+) -> Iterator[T]:
+    validate = adapter.validate_json
+    validate_list = list_adapter.validate_json
+
+    for blob in batches:
+        try:
+            yield from validate_list(blob)
+        except ValidationError:
+            items, _, _ = extract_array_items(blob, is_start=True)
+            for item_bytes in items:
+                yield validate(item_bytes)
+
+
+async def _validate_json_blob_batches_aiter(
+    batches: AsyncIterator[bytes],
+    adapter: TypeAdapter[T],
+    list_adapter: TypeAdapter[list[T]],
+) -> AsyncIterator[T]:
+    validate = adapter.validate_json
+    validate_list = list_adapter.validate_json
+
+    async for blob in batches:
+        try:
+            for item in validate_list(blob):
+                yield item
+        except ValidationError:
+            items, _, _ = extract_array_items(blob, is_start=True)
+            for item_bytes in items:
+                yield validate(item_bytes)
+
+
+def _validate_json_item_batches_iter(
+    batches: Iterator[list[bytes]],
+    adapter: TypeAdapter[T],
+    list_adapter: TypeAdapter[list[T]],
+) -> Iterator[T]:
+    validate = adapter.validate_json
+    validate_list = list_adapter.validate_json
+
+    for items in batches:
+        if len(items) == 1:
+            yield validate(items[0])
+            continue
+
+        blob = b"[" + b",".join(items) + b"]"
+        try:
+            yield from validate_list(blob)
+        except ValidationError:
+            for item_bytes in items:
+                yield validate(item_bytes)
+
+
+async def _validate_json_item_batches_aiter(
+    batches: AsyncIterator[list[bytes]],
+    adapter: TypeAdapter[T],
+    list_adapter: TypeAdapter[list[T]],
+) -> AsyncIterator[T]:
+    validate = adapter.validate_json
+    validate_list = list_adapter.validate_json
+
+    async for items in batches:
+        if len(items) == 1:
+            yield validate(items[0])
+            continue
+
+        blob = b"[" + b",".join(items) + b"]"
+        try:
+            for item in validate_list(blob):
+                yield item
+        except ValidationError:
+            for item_bytes in items:
+                yield validate(item_bytes)
 
 
 def stream_projected_json_array_iter(

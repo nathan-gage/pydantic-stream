@@ -7,7 +7,10 @@ from pydantic import TypeAdapter
 from pydantic_core import ValidationError
 
 from ._native import ObjectSpec, extract_array_items, project_array_items_sliced, project_array_nav
-from ._streaming import stream_projected_json_array_iter
+from ._streaming import (
+    _stream_projected_json_array_blob_batches_iter,
+    _validate_json_blob_batches_iter,
+)
 
 T = TypeVar("T")
 
@@ -36,11 +39,14 @@ class StreamArray(Generic[T]):
 
     def __iter__(self) -> Iterator[T]:
         if self._prefix:
-            yield from stream_projected_json_array_iter(
-                self._data,
-                self._spec,
-                self._adapter.validate_json,
-                root_prefix=self._prefix,
+            yield from _validate_json_blob_batches_iter(
+                _stream_projected_json_array_blob_batches_iter(
+                    self._data,
+                    self._spec,
+                    root_prefix=self._prefix,
+                ),
+                self._adapter,
+                self._list_adapter,
             )
             return
 
