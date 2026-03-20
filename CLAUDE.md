@@ -72,5 +72,5 @@ src/pydantic_stream/             Python package — mixins, schema compilation, 
 
 ## Conventions
 
-- Rust: `unsafe_code = "forbid"`, clippy pedantic+nursery as warnings, `unwrap_used`/`expect_used` warned (tests `#[allow]`), MSRV 1.75, line width 100
+- Rust: `unsafe_code = "forbid"`, clippy pedantic+nursery as warnings, `unwrap_used`/`expect_used` warned (tests `#[allow]`), MSRV 1.85, line width 100
 - Python: >=3.11, ruff (E/F/I/UP/B), line length 100 (relaxed in tests/benchmarks/demo), `filterwarnings = ["error"]` in pytest

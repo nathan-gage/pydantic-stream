@@ -562,7 +562,7 @@ fn fast_skip_string(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
                 return Err(JiterError {
                     error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingString),
                     index: pos,
-                })
+                });
             }
             Some(offset) => {
                 pos += offset;
@@ -802,9 +802,10 @@ mod tests {
     fn project_array_rejects_non_object_items() {
         let s = mk_spec(&[("x", field("x"))]);
         let err = project_array(b"[{\"x\":1},2]", &s).unwrap_err();
-        assert!(err
-            .message
-            .contains("Expected array items to be JSON objects"));
+        assert!(
+            err.message
+                .contains("Expected array items to be JSON objects")
+        );
     }
 
     // -- project_array_items tests --
@@ -887,9 +888,10 @@ mod tests {
         let s = mk_spec(&[("x", field("x"))]);
         let err = project_array_items_sliced(b"[{\"x\":1},2]", &s, &[], 0, None, 1).unwrap_err();
 
-        assert!(err
-            .message
-            .contains("Expected array items to be JSON objects"));
+        assert!(
+            err.message
+                .contains("Expected array items to be JSON objects")
+        );
     }
 
     // -- project_array_nav tests --

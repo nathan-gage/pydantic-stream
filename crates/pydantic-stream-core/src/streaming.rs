@@ -357,9 +357,10 @@ mod tests {
 
         let err = navigate_to_prefix(&mut jiter, &["outer", "items"]).unwrap_err();
 
-        assert!(err
-            .message
-            .contains("Expected a JSON object at prefix segment"));
+        assert!(
+            err.message
+                .contains("Expected a JSON object at prefix segment")
+        );
         assert!(err.message.contains("items"));
     }
 
