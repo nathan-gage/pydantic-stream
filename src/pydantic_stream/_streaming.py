@@ -1,4 +1,4 @@
-"""Public streaming helpers used by the mixins and advanced callers."""
+"""Streaming JSON array helpers."""
 
 from __future__ import annotations
 
@@ -35,15 +35,13 @@ def _coerce_bytes(value: Any, *, description: str) -> bytes:
         return value
     if isinstance(value, str):
         return value.encode("utf-8")
-    if isinstance(value, bytearray):
+    if isinstance(value, (bytearray, memoryview)):
         return bytes(value)
-    if isinstance(value, memoryview):
-        return value.tobytes()
     raise StreamingProjectionError(f"Unsupported {description} type: {type(value).__name__!r}")
 
 
 def _source_to_chunks(source: Any, chunk_size: int) -> Iterator[bytes]:
-    """Normalize any sync source into an iterator of byte chunks."""
+    """Normalize a synchronous source into an iterator of byte chunks."""
     if isinstance(source, (bytes, str, bytearray, memoryview)):
         return _chunk_bytes(_coerce_bytes(source, description="source"), chunk_size)
 
@@ -77,8 +75,8 @@ def _source_to_chunks(source: Any, chunk_size: int) -> Iterator[bytes]:
     return _iterable()
 
 
-async def _source_to_achunks(source: Any, chunk_size: int) -> AsyncIterator[bytes]:
-    """Normalize any sync/async source into an async iterator of byte chunks."""
+async def _async_source_to_chunks(source: Any, chunk_size: int) -> AsyncIterator[bytes]:
+    """Normalize async or sync sources into an async iterator of byte chunks."""
     if isinstance(source, (bytes, str, bytearray, memoryview)):
         for chunk in _chunk_bytes(_coerce_bytes(source, description="source"), chunk_size):
             yield chunk
@@ -88,28 +86,29 @@ async def _source_to_achunks(source: Any, chunk_size: int) -> AsyncIterator[byte
         resolved = source()
         if inspect.isawaitable(resolved):
             resolved = await resolved
-        async for chunk in _source_to_achunks(resolved, chunk_size):
+        async for chunk in _async_source_to_chunks(resolved, chunk_size):
             yield chunk
         return
 
-    if hasattr(source, "__aiter__"):
-        async for chunk in source:
-            if not chunk:
-                continue
-            yield _coerce_bytes(chunk, description="chunk")
-        return
-
-    if hasattr(source, "read"):
+    read = getattr(source, "read", None)
+    if callable(read):
         while True:
-            chunk = source.read(chunk_size)
+            chunk = read(chunk_size)
             if inspect.isawaitable(chunk):
                 chunk = await chunk
             if not chunk:
                 return
             yield _coerce_bytes(chunk, description="chunk")
+        return
 
-    else:
-        for chunk in _source_to_chunks(source, chunk_size):
+    if hasattr(source, "__aiter__"):
+        async for chunk in source:
+            if chunk:
+                yield _coerce_bytes(chunk, description="chunk")
+        return
+
+    for chunk in _source_to_chunks(source, chunk_size):
+        if chunk:
             yield chunk
 
 
@@ -129,6 +128,60 @@ async def _has_trailing_array_content_async(remainder: bytes, chunks: AsyncItera
         if chunk and chunk.strip():
             return True
     return False
+
+
+def _normalize_jsonl_line(line: bytes) -> bytes:
+    return line[:-1] if line.endswith(b"\r") else line
+
+
+def _iter_jsonl_lines_from_chunks(chunks: Iterator[bytes]) -> Iterator[tuple[int, bytes]]:
+    """Split a synchronous byte-chunk stream into numbered JSONL lines."""
+    buffer = bytearray()
+    line_number = 0
+
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buffer.extend(chunk)
+        while True:
+            try:
+                newline_index = buffer.index(b"\n")
+            except ValueError:
+                break
+            line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            line_number += 1
+            yield line_number, _normalize_jsonl_line(line)
+
+    if buffer:
+        line_number += 1
+        yield line_number, _normalize_jsonl_line(bytes(buffer))
+
+
+async def _aiter_jsonl_lines_from_chunks(
+    chunks: AsyncIterator[bytes],
+) -> AsyncIterator[tuple[int, bytes]]:
+    """Split an async byte-chunk stream into numbered JSONL lines."""
+    buffer = bytearray()
+    line_number = 0
+
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        buffer.extend(chunk)
+        while True:
+            try:
+                newline_index = buffer.index(b"\n")
+            except ValueError:
+                break
+            line = bytes(buffer[:newline_index])
+            del buffer[: newline_index + 1]
+            line_number += 1
+            yield line_number, _normalize_jsonl_line(line)
+
+    if buffer:
+        line_number += 1
+        yield line_number, _normalize_jsonl_line(bytes(buffer))
 
 
 def _root_prefix_eof_error(root_prefix: str) -> StreamingProjectionError:
@@ -180,7 +233,7 @@ def _stream_projected_json_array_item_batches_iter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> Iterator[list[bytes]]:
-    """Yield batches of projected item bytes from a top-level or prefixed JSON array."""
+    """Yield batches of projected item bytes from a top-level or prefixed array."""
     chunks = _source_to_chunks(source, chunk_size)
     buffer = bytearray()
     is_start = True
@@ -243,8 +296,8 @@ async def _stream_projected_json_array_item_batches_aiter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> AsyncIterator[list[bytes]]:
-    """Async variant of _stream_projected_json_array_item_batches_iter."""
-    chunks = _source_to_achunks(source, chunk_size)
+    """Async variant of ``_stream_projected_json_array_item_batches_iter``."""
+    chunks = _async_source_to_chunks(source, chunk_size)
     buffer = bytearray()
     is_start = True
     saw_input = False
@@ -327,8 +380,8 @@ async def _stream_projected_json_array_blob_batches_aiter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> AsyncIterator[bytes]:
-    """Async variant of _stream_projected_json_array_blob_batches_iter."""
-    chunks = _source_to_achunks(source, chunk_size)
+    """Async variant of ``_stream_projected_json_array_blob_batches_iter``."""
+    chunks = _async_source_to_chunks(source, chunk_size)
     streamer = ProjectedArrayBlobStreamer(spec, root_prefix)
 
     async for chunk in chunks:
@@ -348,7 +401,7 @@ def _stream_projected_json_array_item_bytes_iter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> Iterator[bytes]:
-    """Yield projected item bytes from a top-level or prefixed JSON array."""
+    """Yield projected item bytes from a top-level or prefixed array."""
     for items in _stream_projected_json_array_item_batches_iter(
         source,
         spec,
@@ -365,7 +418,7 @@ async def _stream_projected_json_array_item_bytes_aiter(
     root_prefix: str | None = None,
     chunk_size: int = 1_048_576,
 ) -> AsyncIterator[bytes]:
-    """Async variant of _stream_projected_json_array_item_bytes_iter."""
+    """Async variant of ``_stream_projected_json_array_item_bytes_iter``."""
     async for items in _stream_projected_json_array_item_batches_aiter(
         source,
         spec,
@@ -439,49 +492,6 @@ async def _validate_json_blob_batches_aiter(
                 yield item
 
 
-def _validate_json_item_batches_iter(
-    batches: Iterator[list[bytes]],
-    adapter: TypeAdapter[T],
-    list_adapter: TypeAdapter[list[T]],
-) -> Iterator[T]:
-    validate = adapter.validate_json
-    validate_list = list_adapter.validate_json
-
-    for items in batches:
-        if len(items) == 1:
-            yield validate(items[0])
-            continue
-
-        blob = b"[" + b",".join(items) + b"]"
-        try:
-            yield from validate_list(blob)
-        except ValidationError:
-            for item_bytes in items:
-                yield validate(item_bytes)
-
-
-async def _validate_json_item_batches_aiter(
-    batches: AsyncIterator[list[bytes]],
-    adapter: TypeAdapter[T],
-    list_adapter: TypeAdapter[list[T]],
-) -> AsyncIterator[T]:
-    validate = adapter.validate_json
-    validate_list = list_adapter.validate_json
-
-    async for items in batches:
-        if len(items) == 1:
-            yield validate(items[0])
-            continue
-
-        blob = b"[" + b",".join(items) + b"]"
-        try:
-            for item in validate_list(blob):
-                yield item
-        except ValidationError:
-            for item_bytes in items:
-                yield validate(item_bytes)
-
-
 def stream_projected_json_array_iter(
     source: Any,
     spec: ObjectSpec,
@@ -528,12 +538,7 @@ def stream_json_array(
     *,
     chunk_size: int = 1_048_576,
 ) -> Iterator[T]:
-    """Yield items from a plain JSON array in bounded memory.
-
-    This helper does not perform projection; it validates each item as-is with
-    ``adapter.validate_json``. For projection-aware streaming, prefer the mixin
-    methods or ``stream_projected_json_array_iter``.
-    """
+    """Yield items from a plain JSON array in bounded memory."""
     chunks = _source_to_chunks(source, chunk_size)
 
     buffer = bytearray()
@@ -569,8 +574,51 @@ def stream_json_array(
             raise StreamingProjectionError("Trailing content after JSON array")
 
 
+async def stream_json_array_async(
+    source: Any,
+    adapter: TypeAdapter[T],
+    *,
+    chunk_size: int = 1_048_576,
+) -> AsyncIterator[T]:
+    """Like ``stream_json_array`` but accepts async sources."""
+    chunks = _async_source_to_chunks(source, chunk_size)
+
+    buffer = bytearray()
+    is_start = True
+    saw_input = False
+
+    async for chunk in chunks:
+        if not chunk:
+            continue
+        saw_input = True
+        buffer.extend(chunk)
+        items, consumed, finished = extract_array_items(bytes(buffer), is_start)
+        for item_bytes in items:
+            yield adapter.validate_json(item_bytes)
+        del buffer[:consumed]
+        is_start = False
+        if finished:
+            if await _has_trailing_array_content_async(bytes(buffer), chunks):
+                raise StreamingProjectionError("Trailing content after JSON array")
+            return
+
+    if saw_input and not buffer:
+        raise StreamingProjectionError("Unexpected end of JSON array")
+
+    if buffer:
+        items, consumed, finished = extract_array_items(bytes(buffer), is_start)
+        for item_bytes in items:
+            yield adapter.validate_json(item_bytes)
+        del buffer[:consumed]
+        if not finished:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+        if bytes(buffer).strip():
+            raise StreamingProjectionError("Trailing content after JSON array")
+
+
 __all__ = [
     "stream_json_array",
+    "stream_json_array_async",
     "stream_projected_json_array_iter",
     "stream_projected_json_array_aiter",
 ]

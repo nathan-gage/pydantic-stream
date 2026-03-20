@@ -1,4 +1,4 @@
-"""Schema compilation — builds Rust FieldSpec/ObjectSpec from pydantic core schemas."""
+"""Helpers for building projection specs from Pydantic schemas."""
 
 from __future__ import annotations
 

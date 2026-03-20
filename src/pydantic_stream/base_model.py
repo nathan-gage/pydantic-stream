@@ -6,9 +6,20 @@ from typing import Any, ClassVar, Self, TypeVar, cast
 from pydantic import BaseModel, TypeAdapter
 from pydantic_core import ValidationError
 
-from ._native import ObjectSpec, StreamingProjectionError, project_jsonl, project_object
+from ._native import (
+    ObjectSpec,
+    StreamingProjectionError,
+    project_jsonl,
+    project_object,
+    validate_array_items_partial,
+)
 from ._schema import compile_model_spec
 from ._streaming import (
+    _aiter_jsonl_lines_from_chunks,
+    _async_source_to_chunks,
+    _has_trailing_array_content_async,
+    _recontext_stream_validation_error,
+    _source_to_chunks,
     _stream_projected_json_array_blob_batches_aiter,
     _stream_projected_json_array_blob_batches_iter,
     _validate_json_blob_batches_aiter,
@@ -19,17 +30,21 @@ from .stream_array import StreamArray
 StreamableModel = TypeVar("StreamableModel", bound="StreamingBaseModelMixin")
 
 
+def _as_native_bytes(data: bytes | bytearray | memoryview) -> bytes:
+    return data if isinstance(data, bytes) else bytes(data)
+
+
 def _to_bytes(source: Any) -> bytes:
-    """Normalize any source to bytes."""
+    """Normalize an eager input source to ``bytes``."""
     if isinstance(source, bytes):
         return source
+    if isinstance(source, (bytearray, memoryview)):
+        return _as_native_bytes(source)
     if isinstance(source, str):
         return source.encode("utf-8")
-    if isinstance(source, bytearray):
-        return bytes(source)
     if callable(source):
         resolved = source()
-        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray)):
+        if callable(resolved) and not isinstance(resolved, (bytes, str, bytearray, memoryview)):
             raise StreamingProjectionError(
                 f"Callable source returned another callable: {type(resolved).__name__!r}"
             )
@@ -38,33 +53,36 @@ def _to_bytes(source: Any) -> bytes:
         data = source.read()
         if isinstance(data, str):
             return data.encode("utf-8")
-        return bytes(data) if isinstance(data, bytearray) else data
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, (bytearray, memoryview)):
+            return _as_native_bytes(data)
     raise StreamingProjectionError(f"Unsupported source type: {type(source).__name__!r}")
 
 
 def _to_bytes_jsonl(source: Any) -> bytes:
-    """Like _to_bytes but also handles iterables of str/bytes lines (for JSONL)."""
-    if isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read"):
+    """Like ``_to_bytes`` but also handles iterables of JSONL lines."""
+    if isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read"):
         return _to_bytes(source)
     parts: list[bytes] = []
     for item in source:
         if isinstance(item, str):
             parts.append(item.encode("utf-8"))
-        elif isinstance(item, bytearray):
-            parts.append(bytes(item))
         elif isinstance(item, bytes):
             parts.append(item)
+        elif isinstance(item, (bytearray, memoryview)):
+            parts.append(_as_native_bytes(item))
         else:
             raise StreamingProjectionError(f"Unsupported line type: {type(item).__name__!r}")
     return b"\n".join(parts)
 
 
 def _is_eager_source(source: Any) -> bool:
-    """True if source is bytes/str/bytearray/file-like (not an iterator)."""
-    return isinstance(source, (bytes, str, bytearray)) or hasattr(source, "read")
+    """True if source is bytes-like/str/file-like (not an iterator)."""
+    return isinstance(source, (bytes, str, bytearray, memoryview)) or hasattr(source, "read")
 
 
-def _has_trailing_array_content(remainder: bytes, chunks: Iterator[Any]) -> bool:
+def _has_trailing_array_content(remainder: Any, chunks: Iterator[Any]) -> bool:
     if remainder.strip():
         return True
     for chunk in chunks:
@@ -154,6 +172,8 @@ class StreamingBaseModelMixin(BaseModel):
             adapter=cls._streaming_adapter(),
             list_adapter=cls._streaming_list_adapter(),
             root_prefix=root_prefix,
+            prefer_itemwise_iter=True,
+            allow_raw_small_iter=cls.model_config.get("extra") in (None, "ignore"),
         )
 
     @classmethod
@@ -170,20 +190,82 @@ class StreamingBaseModelMixin(BaseModel):
         Use ``root_prefix`` for nested arrays such as ``{"pages": [...]}``.
         """
         adapter = cls._streaming_adapter()
-        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        yield from _validate_json_blob_batches_iter(
-            _stream_projected_json_array_blob_batches_iter(
-                source,
-                spec,
+        if root_prefix is not None:
+            yield from _validate_json_blob_batches_iter(
+                _stream_projected_json_array_blob_batches_iter(
+                    source,
+                    spec,
+                    root_prefix=root_prefix,
+                    chunk_size=chunk_size,
+                ),
+                adapter,
+                cls._streaming_list_adapter(),
                 root_prefix=root_prefix,
-                chunk_size=chunk_size,
-            ),
-            adapter,
-            list_adapter,
-            root_prefix=root_prefix,
-        )
+            )
+            return
+
+        validate = adapter.validator.validate_json
+        chunks = _source_to_chunks(source, chunk_size)
+
+        buffer = bytearray()
+        is_start = True
+        saw_input = False
+        item_index = 0
+
+        for chunk in chunks:
+            if not chunk:
+                continue
+            saw_input = True
+            buffer.extend(chunk)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            item_index += len(items)
+            del buffer[:consumed]
+            is_start = False
+            if finished:
+                if _has_trailing_array_content(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
+                return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+
+        if buffer:
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            del buffer[:consumed]
+            if not finished:
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if bytes(buffer).strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
     async def stream_model_validate_json_array_aiter(
@@ -199,21 +281,85 @@ class StreamingBaseModelMixin(BaseModel):
         byte chunks. Use ``root_prefix`` for nested arrays.
         """
         adapter = cls._streaming_adapter()
-        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        async for item in _validate_json_blob_batches_aiter(
-            _stream_projected_json_array_blob_batches_aiter(
-                source,
-                spec,
+        if root_prefix is not None:
+            async for item in _validate_json_blob_batches_aiter(
+                _stream_projected_json_array_blob_batches_aiter(
+                    source,
+                    spec,
+                    root_prefix=root_prefix,
+                    chunk_size=chunk_size,
+                ),
+                adapter,
+                cls._streaming_list_adapter(),
                 root_prefix=root_prefix,
-                chunk_size=chunk_size,
-            ),
-            adapter,
-            list_adapter,
-            root_prefix=root_prefix,
-        ):
-            yield item
+            ):
+                yield item
+            return
+
+        validate = adapter.validator.validate_json
+        chunks = _async_source_to_chunks(source, chunk_size)
+
+        buffer = bytearray()
+        is_start = True
+        saw_input = False
+        item_index = 0
+
+        async for chunk in chunks:
+            if not chunk:
+                continue
+            saw_input = True
+            buffer.extend(chunk)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            item_index += len(items)
+            del buffer[:consumed]
+            is_start = False
+            if finished:
+                if await _has_trailing_array_content_async(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
+                return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+
+        if buffer:
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            del buffer[:consumed]
+            if not finished:
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if bytes(buffer).strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
     def stream_model_validate_jsonl_iter(
@@ -246,6 +392,33 @@ class StreamingBaseModelMixin(BaseModel):
                 yield adapter.validate_json(line)
             except ValidationError as exc:
                 raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+
+    @classmethod
+    async def stream_model_validate_jsonl_aiter(
+        cls: type[StreamableModel],
+        source: Any,
+        *,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[StreamableModel]:
+        """Async version of ``stream_model_validate_jsonl_iter``."""
+        adapter = cls._streaming_adapter()
+        spec = cls._streaming_spec()
+        item_index = 0
+
+        async for line_number, raw_line in _aiter_jsonl_lines_from_chunks(
+            _async_source_to_chunks(source, chunk_size)
+        ):
+            if not raw_line.strip():
+                continue
+            try:
+                projected = project_object(raw_line, spec)
+            except StreamingProjectionError as exc:
+                raise StreamingProjectionError(f"{exc} (line {line_number})") from exc
+            try:
+                yield adapter.validate_json(projected)
+            except ValidationError as exc:
+                raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+            item_index += 1
 
     @classmethod
     def stream_model_validate_jsonl(

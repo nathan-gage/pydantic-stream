@@ -8,7 +8,8 @@ import json
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
-from pydantic_stream import FieldSpec, ObjectSpec, project_object
+from pydantic_stream import FieldSpec, ObjectSpec
+from pydantic_stream._native import project_object
 
 from .assertions import (
     assert_json_array_matches_direct,

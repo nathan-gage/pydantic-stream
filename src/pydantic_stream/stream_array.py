@@ -1,18 +1,72 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Generic, TypeVar, overload
+from typing import Any, Generic, TypeVar, overload
 
 from pydantic import TypeAdapter
 from pydantic_core import ValidationError
 
-from ._native import ObjectSpec, extract_array_items, project_array_items_sliced, project_array_nav
+from ._native import (
+    ObjectSpec,
+    extract_array_items,
+    project_array_item_at,
+    project_array_items_sliced,
+    project_array_nav,
+    validate_array_items,
+    validate_array_items_next_batch,
+    validate_array_nav,
+    validate_raw_array_item_next,
+    validate_raw_array_items,
+)
 from ._streaming import (
     _stream_projected_json_array_blob_batches_iter,
     _validate_json_blob_batches_iter,
 )
 
 T = TypeVar("T")
+
+_ITER_ITEMWISE_BYTES_THRESHOLD = 256 * 1024
+_RAW_ITEMWISE_BYTES_THRESHOLD = 128 * 1024
+_EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD = 128 * 1024
+_PROJECTED_ITER_BATCH_SIZE = 16
+
+
+def _iter_items_then_raise(items: list[T], error: BaseException) -> Iterator[T]:
+    yield from items
+    raise error
+
+
+def _iter_validated_array_item_batches(data: Any, spec: ObjectSpec, validator: Any) -> Iterator[T]:
+    pos = 0
+    started = False
+    while True:
+        items, pos, finished, error = validate_array_items_next_batch(
+            data,
+            spec,
+            validator,
+            pos,
+            started,
+            _PROJECTED_ITER_BATCH_SIZE,
+        )
+        if items:
+            yield from items
+        if error is not None:
+            raise error
+        if finished:
+            return
+        started = True
+
+
+def _iter_validated_raw_array_items(data: Any, validator: Any) -> Iterator[T]:
+    pos = 0
+    started = False
+    while True:
+        item, pos, finished = validate_raw_array_item_next(data, validator, pos, started)
+        if finished:
+            return
+        started = True
+        if item is not None:
+            yield item
 
 
 class StreamArray(Generic[T]):
@@ -22,26 +76,39 @@ class StreamArray(Generic[T]):
     validating the entire array up front.
     """
 
-    __slots__ = ("_data", "_spec", "_adapter", "_list_adapter", "_prefix")
+    __slots__ = (
+        "_data",
+        "_spec",
+        "_adapter",
+        "_list_adapter",
+        "_prefix",
+        "_prefer_itemwise_iter",
+        "_allow_raw_small_iter",
+    )
 
     def __init__(
         self,
-        data: bytes,
+        data: Any,
         spec: ObjectSpec,
         adapter: TypeAdapter[T],
         list_adapter: TypeAdapter[list[T]],
         root_prefix: str | None = None,
+        *,
+        prefer_itemwise_iter: bool = False,
+        allow_raw_small_iter: bool = False,
     ) -> None:
-        self._data = data
+        self._data = data if isinstance(data, bytes) else bytes(data)
         self._spec = spec
         self._adapter = adapter
         self._list_adapter = list_adapter
         self._prefix = root_prefix
+        self._prefer_itemwise_iter = prefer_itemwise_iter
+        self._allow_raw_small_iter = allow_raw_small_iter
 
     def __iter__(self) -> Iterator[T]:
         """Iterate over validated items on demand."""
-        if self._prefix:
-            yield from _validate_json_blob_batches_iter(
+        if self._prefix is not None:
+            return _validate_json_blob_batches_iter(
                 _stream_projected_json_array_blob_batches_iter(
                     self._data,
                     self._spec,
@@ -51,24 +118,28 @@ class StreamArray(Generic[T]):
                 self._list_adapter,
                 root_prefix=self._prefix,
             )
-            return
 
-        # Fast path: project the entire array into one compact blob (single Rust
-        # allocation), then validate everything in one pydantic-core call.
-        # For the common case of valid data this avoids N per-item Vec<u8>
-        # allocations and N separate validate_json calls.
+        fast_validate = self._adapter.validator.validate_json
+        data_len = len(self._data)
+        if self._allow_raw_small_iter and data_len <= _RAW_ITEMWISE_BYTES_THRESHOLD:
+            if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
+                items, error = validate_raw_array_items(self._data, fast_validate)
+                return iter(items) if error is None else _iter_items_then_raise(items, error)
+            return _iter_validated_raw_array_items(self._data, fast_validate)
+
+        if self._prefer_itemwise_iter or data_len <= _ITER_ITEMWISE_BYTES_THRESHOLD:
+            if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
+                items, error = validate_array_items(self._data, self._spec, fast_validate)
+                return iter(items) if error is None else _iter_items_then_raise(items, error)
+            return _iter_validated_array_item_batches(self._data, self._spec, fast_validate)
+
         blob = project_array_nav(self._data, self._spec, self._prefix)
         try:
-            yield from self._list_adapter.validate_json(blob)
+            return iter(self._list_adapter.validate_json(blob))
         except ValidationError:
-            # Slow path: re-validate item-by-item from the projected blob so
-            # that ValidationError.loc contains ("field",) not (index, "field").
-            # This also preserves "yield valid items up to the first error"
-            # semantics that per-item validation gives.
             items, _, _ = extract_array_items(blob, is_start=True)
             validate = self._adapter.validate_json
-            for item_bytes in items:
-                yield validate(item_bytes)
+            return (validate(item_bytes) for item_bytes in items)
 
     @overload
     def __getitem__(self, index: int) -> T: ...
@@ -99,21 +170,24 @@ class StreamArray(Generic[T]):
                 stop,
                 step or 1,
             )
-            return [self._adapter.validate_json(b) for b in items]
+            validate = self._adapter.validator.validate_json
+            return [validate(item) for item in items]
 
         if index < 0:
             raise IndexError("StreamArray does not support negative indexing")
-        items = project_array_items_sliced(
-            self._data, self._spec, self._prefix, index, index + 1, 1
-        )
-        if not items:
+        item = project_array_item_at(self._data, self._spec, self._prefix, index)
+        if item is None:
             raise IndexError(f"StreamArray index {index} out of range")
-        return self._adapter.validate_json(items[0])
+        return self._adapter.validator.validate_json(item)
 
     def to_list(self) -> list[T]:
         """Materialize the whole array and validate it in one pass."""
-        blob = project_array_nav(self._data, self._spec, self._prefix)
-        return self._list_adapter.validate_json(blob)
+        return validate_array_nav(
+            self._data,
+            self._spec,
+            self._list_adapter.validator.validate_json,
+            self._prefix,
+        )
 
     def __repr__(self) -> str:
         prefix_part = f", prefix={self._prefix!r}" if self._prefix else ""

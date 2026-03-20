@@ -8,7 +8,7 @@ use pydantic_stream_core::spec;
 ///
 /// Most users will not build ``FieldSpec`` directly; it is mainly useful when
 /// constructing an ``ObjectSpec`` by hand.
-#[pyclass(frozen, name = "FieldSpec")]
+#[pyclass(frozen, from_py_object, name = "FieldSpec")]
 #[derive(Clone, Debug)]
 pub struct PyFieldSpec {
     pub inner: spec::FieldSpec,
@@ -50,7 +50,7 @@ impl PyFieldSpec {
 /// ``ObjectSpec`` tells the Rust projector which input keys to keep. Most
 /// users should get one from ``compile_model_spec(...)`` or
 /// ``compile_object_spec(...)`` instead of constructing it manually.
-#[pyclass(frozen, name = "ObjectSpec")]
+#[pyclass(frozen, from_py_object, name = "ObjectSpec")]
 #[derive(Clone, Debug)]
 pub struct PyObjectSpec {
     pub inner: Arc<spec::ObjectSpec>,

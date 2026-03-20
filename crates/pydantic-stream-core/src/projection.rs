@@ -1,5 +1,4 @@
 use jiter::{Jiter, JiterError, JiterErrorType, JsonErrorType, Peek};
-use memchr::memchr2;
 
 use crate::error::StreamError;
 use crate::spec::ObjectSpec;
@@ -104,6 +103,290 @@ pub fn project_array_items(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8
     Ok(results)
 }
 
+/// Error from visiting projected JSON array items.
+#[derive(Debug)]
+pub enum VisitProjectedArrayItemsError<E> {
+    Stream(StreamError),
+    Visitor(E),
+}
+
+#[derive(Debug)]
+pub struct NextProjectedItemResult {
+    pub item: Option<Vec<u8>>,
+    pub next_pos: usize,
+    pub finished: bool,
+}
+
+#[derive(Debug)]
+pub struct NextProjectedItemsBatchResult {
+    pub items: Vec<Vec<u8>>,
+    pub next_pos: usize,
+    pub finished: bool,
+}
+
+/// Project the next small batch of items from a top-level JSON array.
+pub fn project_next_array_items_batch(
+    input: &[u8],
+    spec: &ObjectSpec,
+    mut pos: usize,
+    started: bool,
+    batch_size: usize,
+) -> Result<NextProjectedItemsBatchResult, StreamError> {
+    let batch_size = batch_size.max(1);
+    let mut items = Vec::with_capacity(batch_size);
+
+    if !started {
+        let slice = &input[pos..];
+        let mut jiter = Jiter::new(slice);
+        let peek = jiter.peek()?;
+        if peek != Peek::Array {
+            return Err(StreamError::new(format!(
+                "Expected a top-level JSON array, got {peek:?}"
+            )));
+        }
+        let first = jiter.known_array()?;
+        let Some(first_peek) = first else {
+            return Ok(NextProjectedItemsBatchResult {
+                items,
+                next_pos: pos + jiter.current_index(),
+                finished: true,
+            });
+        };
+        let (next_pos, finished) = fill_batch(
+            &mut jiter, slice, pos, spec, &mut items, batch_size, first_peek,
+        )?;
+        return Ok(NextProjectedItemsBatchResult {
+            items,
+            next_pos,
+            finished,
+        });
+    }
+
+    skip_ws(input, &mut pos);
+    match input.get(pos) {
+        Some(b']') => {
+            return Ok(NextProjectedItemsBatchResult {
+                items,
+                next_pos: pos + 1,
+                finished: true,
+            });
+        }
+        Some(b',') => {
+            pos += 1;
+            skip_ws(input, &mut pos);
+        }
+        Some(_) => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::ExpectedListCommaOrEnd),
+                index: pos,
+            }
+            .into());
+        }
+        None => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingList),
+                index: pos,
+            }
+            .into());
+        }
+    }
+
+    let slice = &input[pos..];
+    let mut jiter = Jiter::new(slice);
+    let peek = jiter.peek()?;
+    let (next_pos, finished) =
+        fill_batch(&mut jiter, slice, pos, spec, &mut items, batch_size, peek)?;
+    Ok(NextProjectedItemsBatchResult {
+        items,
+        next_pos,
+        finished,
+    })
+}
+
+/// Project one object item and continue filling `items` until `batch_size` or end-of-array.
+///
+/// `first_peek` is the peek already returned for the current item position.
+/// Returns `(next_pos, finished)` where `next_pos` is the absolute offset in the
+/// original input and `finished` indicates whether `]` was reached.
+fn fill_batch<'a>(
+    jiter: &mut Jiter<'a>,
+    slice: &'a [u8],
+    base_pos: usize,
+    spec: &ObjectSpec,
+    items: &mut Vec<Vec<u8>>,
+    batch_size: usize,
+    first_peek: Peek,
+) -> Result<(usize, bool), StreamError> {
+    if first_peek != Peek::Object {
+        return Err(StreamError::new(format!(
+            "Expected array items to be JSON objects, got {first_peek:?}"
+        )));
+    }
+    let mut output = Vec::with_capacity(192);
+    project_object_inner::<true, true>(jiter, slice, spec, &mut output)?;
+    items.push(output);
+
+    while items.len() < batch_size {
+        match jiter.array_step()? {
+            Some(next_peek) => {
+                if next_peek != Peek::Object {
+                    return Err(StreamError::new(format!(
+                        "Expected array items to be JSON objects, got {next_peek:?}"
+                    )));
+                }
+                let mut output = Vec::with_capacity(192);
+                project_object_inner::<true, true>(jiter, slice, spec, &mut output)?;
+                items.push(output);
+            }
+            None => return Ok((base_pos + jiter_abs_pos(jiter, slice), true)),
+        }
+    }
+    Ok((base_pos + jiter_abs_pos(jiter, slice), false))
+}
+
+/// Project the next item from a top-level JSON array.
+pub fn project_next_array_item(
+    input: &[u8],
+    spec: &ObjectSpec,
+    mut pos: usize,
+    started: bool,
+) -> Result<NextProjectedItemResult, StreamError> {
+    if !started {
+        let slice = &input[pos..];
+        let mut jiter = Jiter::new(slice);
+        let peek = jiter.peek()?;
+        if peek != Peek::Array {
+            return Err(StreamError::new(format!(
+                "Expected a top-level JSON array, got {peek:?}"
+            )));
+        }
+        let first = jiter.known_array()?;
+        return match first {
+            None => Ok(NextProjectedItemResult {
+                item: None,
+                next_pos: pos + jiter.current_index(),
+                finished: true,
+            }),
+            Some(peek) => {
+                if peek != Peek::Object {
+                    return Err(StreamError::new(format!(
+                        "Expected array items to be JSON objects, got {peek:?}"
+                    )));
+                }
+                let mut output = Vec::with_capacity(192);
+                project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
+                Ok(NextProjectedItemResult {
+                    item: Some(output),
+                    next_pos: pos + jiter_abs_pos(&jiter, slice),
+                    finished: false,
+                })
+            }
+        };
+    }
+
+    skip_ws(input, &mut pos);
+    match input.get(pos) {
+        Some(b']') => {
+            return Ok(NextProjectedItemResult {
+                item: None,
+                next_pos: pos + 1,
+                finished: true,
+            });
+        }
+        Some(b',') => {
+            pos += 1;
+            skip_ws(input, &mut pos);
+        }
+        Some(_) => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::ExpectedListCommaOrEnd),
+                index: pos,
+            }
+            .into());
+        }
+        None => {
+            return Err(JiterError {
+                error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingList),
+                index: pos,
+            }
+            .into());
+        }
+    }
+
+    let slice = &input[pos..];
+    let mut jiter = Jiter::new(slice);
+    let peek = jiter.peek()?;
+    if peek != Peek::Object {
+        return Err(StreamError::new(format!(
+            "Expected array items to be JSON objects, got {peek:?}"
+        )));
+    }
+    let mut output = Vec::with_capacity(192);
+    project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
+    Ok(NextProjectedItemResult {
+        item: Some(output),
+        next_pos: pos + jiter_abs_pos(&jiter, slice),
+        finished: false,
+    })
+}
+
+/// Visit projected JSON array items without materializing the outer Vec.
+pub fn visit_projected_array_items<F, E>(
+    input: &[u8],
+    spec: &ObjectSpec,
+    mut visitor: F,
+) -> Result<(), VisitProjectedArrayItemsError<E>>
+where
+    F: FnMut(Vec<u8>) -> Result<(), E>,
+{
+    let mut jiter = Jiter::new(input);
+    let peek = jiter
+        .peek()
+        .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+
+    if peek != Peek::Array {
+        return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+            format!("Expected a top-level JSON array, got {peek:?}"),
+        )));
+    }
+
+    let first = jiter
+        .known_array()
+        .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+
+    if let Some(peek) = first {
+        if peek != Peek::Object {
+            return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+                format!("Expected array items to be JSON objects, got {peek:?}"),
+            )));
+        }
+        let mut output = Vec::with_capacity(192);
+        project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)
+            .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+        visitor(output).map_err(VisitProjectedArrayItemsError::Visitor)?;
+
+        while let Some(peek) = jiter
+            .array_step()
+            .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?
+        {
+            if peek != Peek::Object {
+                return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+                    format!("Expected array items to be JSON objects, got {peek:?}"),
+                )));
+            }
+            let mut output = Vec::with_capacity(192);
+            project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)
+                .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+            visitor(output).map_err(VisitProjectedArrayItemsError::Visitor)?;
+        }
+    }
+
+    jiter
+        .finish()
+        .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+    Ok(())
+}
+
 /// Project JSONL (newline-delimited JSON) input.
 /// Returns a Vec of projected JSON byte strings, one per line.
 pub fn project_jsonl(input: &[u8], spec: &ObjectSpec) -> Result<Vec<Vec<u8>>, StreamError> {
@@ -167,14 +450,96 @@ pub fn project_array_items_sliced(
     let mut index: usize = 0;
 
     if let Some(mut peek) = first {
-        loop {
-            if let Some(s) = stop {
-                if index >= s {
-                    break;
+        if step == 1 {
+            loop {
+                if let Some(s) = stop {
+                    if index >= s {
+                        break;
+                    }
+                }
+
+                if index >= start {
+                    if peek != Peek::Object {
+                        return Err(StreamError::new(format!(
+                            "Expected array items to be JSON objects, got {peek:?}"
+                        )));
+                    }
+                    let mut output = Vec::with_capacity(256);
+                    project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
+                    results.push(output);
+                } else {
+                    skip_array_item(peek, &mut jiter, input)?;
+                }
+
+                match jiter.array_step()? {
+                    Some(next_peek) => {
+                        peek = next_peek;
+                        index += 1;
+                    }
+                    None => break,
                 }
             }
+        } else {
+            loop {
+                if let Some(s) = stop {
+                    if index >= s {
+                        break;
+                    }
+                }
 
-            if index >= start && (index - start) % step == 0 {
+                if index >= start && (index - start) % step == 0 {
+                    if peek != Peek::Object {
+                        return Err(StreamError::new(format!(
+                            "Expected array items to be JSON objects, got {peek:?}"
+                        )));
+                    }
+                    let mut output = Vec::with_capacity(256);
+                    project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
+                    results.push(output);
+                } else {
+                    skip_array_item(peek, &mut jiter, input)?;
+                }
+
+                match jiter.array_step()? {
+                    Some(next_peek) => {
+                        peek = next_peek;
+                        index += 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+/// Project a single JSON array item at `index` with optional prefix navigation.
+pub fn project_array_item_at(
+    input: &[u8],
+    spec: &ObjectSpec,
+    prefix: &[&str],
+    index: usize,
+) -> Result<Option<Vec<u8>>, StreamError> {
+    let mut jiter = Jiter::new(input);
+
+    if !prefix.is_empty() {
+        navigate_to_prefix(&mut jiter, prefix)?;
+    }
+
+    let peek = jiter.peek()?;
+    if peek != Peek::Array {
+        return Err(StreamError::new(format!(
+            "Expected a JSON array, got {peek:?}"
+        )));
+    }
+
+    let first = jiter.known_array()?;
+    let mut current_index: usize = 0;
+
+    if let Some(mut peek) = first {
+        loop {
+            if current_index == index {
                 if peek != Peek::Object {
                     return Err(StreamError::new(format!(
                         "Expected array items to be JSON objects, got {peek:?}"
@@ -182,22 +547,21 @@ pub fn project_array_items_sliced(
                 }
                 let mut output = Vec::with_capacity(256);
                 project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)?;
-                results.push(output);
-            } else {
-                jiter.known_skip(peek)?;
+                return Ok(Some(output));
             }
 
+            skip_array_item(peek, &mut jiter, input)?;
             match jiter.array_step()? {
                 Some(next_peek) => {
                     peek = next_peek;
-                    index += 1;
+                    current_index += 1;
                 }
                 None => break,
             }
         }
     }
 
-    Ok(results)
+    Ok(None)
 }
 
 /// Project a JSON array with prefix navigation, returning a single
@@ -656,27 +1020,47 @@ fn jiter_abs_pos(jiter: &Jiter<'_>, input: &[u8]) -> usize {
     (jiter_data_ptr - input_ptr) + jiter.current_index()
 }
 
+#[inline]
+fn skip_array_item<'a>(
+    jiter_peek: Peek,
+    jiter: &mut Jiter<'a>,
+    input: &'a [u8],
+) -> Result<(), JiterError> {
+    if jiter_peek == Peek::Object {
+        let abs_pos = jiter_abs_pos(jiter, input);
+        let abs_end = fast_skip_value(input, abs_pos)?;
+        *jiter = Jiter::new(&input[abs_end..]);
+        Ok(())
+    } else {
+        jiter.known_skip(jiter_peek)
+    }
+}
+
 /// Skip a JSON string that has already had its opening `"` consumed.
 /// Returns the index immediately after the closing `"`.
 #[allow(clippy::inline_always)]
 #[inline(always)]
 fn fast_skip_string(data: &[u8], mut pos: usize) -> Result<usize, JiterError> {
     loop {
-        // SIMD-accelerated search for `"` or `\`
-        match memchr2(b'"', b'\\', &data[pos..]) {
+        match memchr::memchr(b'"', &data[pos..]) {
             None => {
                 return Err(JiterError {
                     error_type: JiterErrorType::JsonError(JsonErrorType::EofWhileParsingString),
                     index: pos,
-                })
+                });
             }
             Some(offset) => {
                 pos += offset;
-                match data[pos] {
-                    b'"' => return Ok(pos + 1),
-                    // Backslash escape: skip `\` and the next character.
-                    _ => pos += 2,
+                let mut slash_count = 0usize;
+                let mut check = pos;
+                while check > 0 && data[check - 1] == b'\\' {
+                    slash_count += 1;
+                    check -= 1;
                 }
+                if slash_count % 2 == 0 {
+                    return Ok(pos + 1);
+                }
+                pos += 1;
             }
         }
     }
@@ -908,9 +1292,10 @@ mod tests {
     fn project_array_rejects_non_object_items() {
         let s = mk_spec(&[("x", field("x"))]);
         let err = project_array(b"[{\"x\":1},2]", &s).unwrap_err();
-        assert!(err
-            .message
-            .contains("Expected array items to be JSON objects"));
+        assert!(
+            err.message
+                .contains("Expected array items to be JSON objects")
+        );
     }
 
     // -- project_array_items tests --
@@ -993,9 +1378,10 @@ mod tests {
         let s = mk_spec(&[("x", field("x"))]);
         let err = project_array_items_sliced(b"[{\"x\":1},2]", &s, &[], 0, None, 1).unwrap_err();
 
-        assert!(err
-            .message
-            .contains("Expected array items to be JSON objects"));
+        assert!(
+            err.message
+                .contains("Expected array items to be JSON objects")
+        );
     }
 
     // -- project_array_nav tests --

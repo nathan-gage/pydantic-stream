@@ -7,15 +7,26 @@ from pydantic import TypeAdapter
 from pydantic.dataclasses import rebuild_dataclass
 from pydantic_core import ValidationError
 
-from ._native import ObjectSpec, StreamingProjectionError, project_jsonl, project_object
+from ._native import (
+    ObjectSpec,
+    StreamingProjectionError,
+    project_jsonl,
+    project_object,
+    validate_array_items_partial,
+)
 from ._schema import compile_object_spec
 from ._streaming import (
+    _aiter_jsonl_lines_from_chunks,
+    _async_source_to_chunks,
+    _has_trailing_array_content_async,
+    _recontext_stream_validation_error,
+    _source_to_chunks,
     _stream_projected_json_array_blob_batches_aiter,
     _stream_projected_json_array_blob_batches_iter,
     _validate_json_blob_batches_aiter,
     _validate_json_blob_batches_iter,
 )
-from .base_model import _is_eager_source, _to_bytes, _to_bytes_jsonl
+from .base_model import _has_trailing_array_content, _is_eager_source, _to_bytes, _to_bytes_jsonl
 from .stream_array import StreamArray
 
 Streamable = TypeVar("Streamable", bound="StreamingDataclassMixin")
@@ -102,6 +113,9 @@ class StreamingDataclassMixin:
             adapter=cls._streaming_adapter(),
             list_adapter=cls._streaming_list_adapter(),
             root_prefix=root_prefix,
+            prefer_itemwise_iter=True,
+            allow_raw_small_iter=getattr(cls, "__pydantic_config__", {}).get("extra")
+            in (None, "ignore"),
         )
 
     @classmethod
@@ -118,20 +132,82 @@ class StreamingDataclassMixin:
         Use ``root_prefix`` for nested arrays such as ``{"pages": [...]}``.
         """
         adapter = cls._streaming_adapter()
-        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        yield from _validate_json_blob_batches_iter(
-            _stream_projected_json_array_blob_batches_iter(
-                source,
-                spec,
+        if root_prefix is not None:
+            yield from _validate_json_blob_batches_iter(
+                _stream_projected_json_array_blob_batches_iter(
+                    source,
+                    spec,
+                    root_prefix=root_prefix,
+                    chunk_size=chunk_size,
+                ),
+                adapter,
+                cls._streaming_list_adapter(),
                 root_prefix=root_prefix,
-                chunk_size=chunk_size,
-            ),
-            adapter,
-            list_adapter,
-            root_prefix=root_prefix,
-        )
+            )
+            return
+
+        validate = adapter.validator.validate_json
+        chunks = _source_to_chunks(source, chunk_size)
+
+        buffer = bytearray()
+        is_start = True
+        saw_input = False
+        item_index = 0
+
+        for chunk in chunks:
+            if not chunk:
+                continue
+            saw_input = True
+            buffer.extend(chunk)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            item_index += len(items)
+            del buffer[:consumed]
+            is_start = False
+            if finished:
+                if _has_trailing_array_content(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
+                return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+
+        if buffer:
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            yield from items
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            del buffer[:consumed]
+            if not finished:
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if bytes(buffer).strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
     async def stream_validate_json_array_aiter(
@@ -147,21 +223,85 @@ class StreamingDataclassMixin:
         byte chunks. Use ``root_prefix`` for nested arrays.
         """
         adapter = cls._streaming_adapter()
-        list_adapter = cls._streaming_list_adapter()
         spec = cls._streaming_spec()
 
-        async for item in _validate_json_blob_batches_aiter(
-            _stream_projected_json_array_blob_batches_aiter(
-                source,
-                spec,
+        if root_prefix is not None:
+            async for item in _validate_json_blob_batches_aiter(
+                _stream_projected_json_array_blob_batches_aiter(
+                    source,
+                    spec,
+                    root_prefix=root_prefix,
+                    chunk_size=chunk_size,
+                ),
+                adapter,
+                cls._streaming_list_adapter(),
                 root_prefix=root_prefix,
-                chunk_size=chunk_size,
-            ),
-            adapter,
-            list_adapter,
-            root_prefix=root_prefix,
-        ):
-            yield item
+            ):
+                yield item
+            return
+
+        validate = adapter.validator.validate_json
+        chunks = _async_source_to_chunks(source, chunk_size)
+
+        buffer = bytearray()
+        is_start = True
+        saw_input = False
+        item_index = 0
+
+        async for chunk in chunks:
+            if not chunk:
+                continue
+            saw_input = True
+            buffer.extend(chunk)
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            item_index += len(items)
+            del buffer[:consumed]
+            is_start = False
+            if finished:
+                if await _has_trailing_array_content_async(bytes(buffer), chunks):
+                    raise StreamingProjectionError("Trailing content after JSON array")
+                return
+
+        if saw_input and not buffer:
+            raise StreamingProjectionError("Unexpected end of JSON array")
+
+        if buffer:
+            items, consumed, finished, error = validate_array_items_partial(
+                bytes(buffer),
+                spec,
+                validate,
+                is_start,
+            )
+            for item in items:
+                yield item
+            if error is not None:
+                if isinstance(error, ValidationError):
+                    raise _recontext_stream_validation_error(
+                        error,
+                        item_index=item_index + len(items),
+                        root_prefix=None,
+                    ) from error
+                raise error
+            del buffer[:consumed]
+            if not finished:
+                raise StreamingProjectionError("Unexpected end of JSON array")
+            if bytes(buffer).strip():
+                raise StreamingProjectionError("Trailing content after JSON array")
 
     @classmethod
     def stream_validate_jsonl_iter(
@@ -194,6 +334,33 @@ class StreamingDataclassMixin:
                 yield adapter.validate_json(line)
             except ValidationError as exc:
                 raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+
+    @classmethod
+    async def stream_validate_jsonl_aiter(
+        cls: type[Streamable],
+        source: Any,
+        *,
+        chunk_size: int = 1_048_576,
+    ) -> AsyncIterator[Streamable]:
+        """Async version of ``stream_validate_jsonl_iter``."""
+        adapter = cls._streaming_adapter()
+        spec = cls._streaming_spec()
+        item_index = 0
+
+        async for line_number, raw_line in _aiter_jsonl_lines_from_chunks(
+            _async_source_to_chunks(source, chunk_size)
+        ):
+            if not raw_line.strip():
+                continue
+            try:
+                projected = project_object(raw_line, spec)
+            except StreamingProjectionError as exc:
+                raise StreamingProjectionError(f"{exc} (line {line_number})") from exc
+            try:
+                yield adapter.validate_json(projected)
+            except ValidationError as exc:
+                raise ValueError(f"Validation failed for item {item_index}: {exc}") from exc
+            item_index += 1
 
     @classmethod
     def stream_validate_jsonl(

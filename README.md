@@ -42,7 +42,15 @@ for page in Page.stream_model_validate_json_array_iter(array_body):
 
 async for page in Page.stream_model_validate_json_array_aiter(async_array_body):
     ...
+
+for page in Page.stream_model_validate_jsonl_iter(jsonl_body):
+    ...
+
+async for page in Page.stream_model_validate_jsonl_aiter(async_jsonl_body):
+    ...
 ```
+
+`StreamingDataclassMixin` provides the same API for `@pydantic.dataclasses.dataclass` (methods are `stream_validate_*` instead of `stream_model_validate_*`).
 
 ### Top-level array vs nested array
 
@@ -100,7 +108,21 @@ for item in stream_projected_json_array_iter(
 This is useful for lightweight dict/TypedDict-style consumers, but the primary
 public API remains the mixin methods above.
 
-`StreamingDataclassMixin` provides the same API for `@pydantic.dataclasses.dataclass` (methods are `stream_validate_*` instead of `stream_model_validate_*`).
+### Projection-free helpers
+
+For projection-free use cases, the top-level helpers are available too:
+
+```python
+from pydantic import TypeAdapter
+from pydantic_stream import stream_json_array, stream_json_array_async
+
+adapter = TypeAdapter(Page)
+items = list(stream_json_array(open("data.json", "rb"), adapter))
+items_async = [
+    item
+    async for item in stream_json_array_async(response.content.iter_chunked(65536), adapter)
+]
+```
 
 ## Development
 
@@ -108,11 +130,13 @@ public API remains the mixin methods above.
 uv sync
 make dev            # build debug extension
 make build-release  # build release extension (needed for benchmarks)
-make test           # Rust + Python tests
+make test           # Rust tests + fresh editable extension + Python tests
 make lint           # clippy + rustfmt + ruff
 make fmt            # auto-format everything
-make bench          # timing benchmarks
-make bench-memory   # memory benchmarks (memray)
+make bench          # release build + timing benchmarks
+make bench-memory   # release build + memory benchmarks (memray)
 ```
+
+Python tests now fail fast if the native extension is missing or older than the Rust sources, so stale editable builds cannot hide regressions.
 
 Run `make help` for all targets. See `benchmarks/README.md` for save/compare workflows and filtering options.

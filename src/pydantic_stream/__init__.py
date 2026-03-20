@@ -5,26 +5,15 @@ Start here:
 - ``StreamingDataclassMixin`` for Pydantic dataclasses
 - ``StreamArray`` for lazy array access
 
-Advanced helpers such as ``stream_projected_json_array_iter`` and the native
-projection functions are also re-exported here.
+Advanced helpers such as ``stream_projected_json_array_iter`` are also
+available for non-model consumers.
 """
 
-from ._native import (
-    FieldSpec,
-    ObjectSpec,
-    StreamingProjectionError,
-    extract_array_items,
-    project_array,
-    project_array_items,
-    project_array_items_partial,
-    project_array_items_sliced,
-    project_array_nav,
-    project_jsonl,
-    project_object,
-)
+from ._native import FieldSpec, ObjectSpec, StreamingProjectionError
 from ._schema import compile_model_spec, compile_object_spec
 from ._streaming import (
     stream_json_array,
+    stream_json_array_async,
     stream_projected_json_array_aiter,
     stream_projected_json_array_iter,
 )
@@ -33,29 +22,18 @@ from .dataclass import StreamingDataclassMixin
 from .stream_array import StreamArray
 
 __all__ = [
-    # Primary user-facing API
     "StreamingBaseModelMixin",
     "StreamingDataclassMixin",
     "StreamArray",
     "StreamingProjectionError",
-    # High-level helpers
     "stream_json_array",
+    "stream_json_array_async",
     "stream_projected_json_array_iter",
     "stream_projected_json_array_aiter",
-    # Low-level spec helpers
     "compile_model_spec",
     "compile_object_spec",
     "FieldSpec",
     "ObjectSpec",
-    # Native projection primitives
-    "extract_array_items",
-    "project_object",
-    "project_array",
-    "project_array_items",
-    "project_array_items_sliced",
-    "project_array_items_partial",
-    "project_array_nav",
-    "project_jsonl",
 ]
 
 

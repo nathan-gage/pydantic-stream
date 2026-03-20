@@ -1,7 +1,7 @@
 [package]
 name = "pydantic-stream-python"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "_native"
@@ -9,7 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 pydantic-stream-core = { path = "../pydantic-stream-core" }
-pyo3 = "0.26"
+pyo3 = "0.28"
 
 [features]
 extension-module = ["pyo3/extension-module"]
