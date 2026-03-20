@@ -388,11 +388,15 @@ class TestSourceTypes:
         assert len(list(result)) == 1
 
     def test_bytearray_source_for_array(self) -> None:
-        result = HarnessUserModel.stream_model_validate_json_array(bytearray(b'[{"id":1,"name":"Ada"}]'))
+        result = HarnessUserModel.stream_model_validate_json_array(
+            bytearray(b'[{"id":1,"name":"Ada"}]')
+        )
         assert len(list(result)) == 1
 
     def test_memoryview_source_for_array(self) -> None:
-        result = HarnessUserModel.stream_model_validate_json_array(memoryview(b'[{"id":1,"name":"Ada"}]'))
+        result = HarnessUserModel.stream_model_validate_json_array(
+            memoryview(b'[{"id":1,"name":"Ada"}]')
+        )
         assert len(list(result)) == 1
 
     def test_str_source_for_jsonl(self) -> None:

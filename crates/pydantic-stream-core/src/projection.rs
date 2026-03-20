@@ -145,51 +145,21 @@ pub fn project_next_array_items_batch(
             )));
         }
         let first = jiter.known_array()?;
-        match first {
-            None => {
-                return Ok(NextProjectedItemsBatchResult {
-                    items,
-                    next_pos: pos + jiter.current_index(),
-                    finished: true,
-                });
-            }
-            Some(peek) => {
-                if peek != Peek::Object {
-                    return Err(StreamError::new(format!(
-                        "Expected array items to be JSON objects, got {peek:?}"
-                    )));
-                }
-                let mut output = Vec::with_capacity(192);
-                project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
-                items.push(output);
-                while items.len() < batch_size {
-                    match jiter.array_step()? {
-                        Some(next_peek) => {
-                            if next_peek != Peek::Object {
-                                return Err(StreamError::new(format!(
-                                    "Expected array items to be JSON objects, got {next_peek:?}"
-                                )));
-                            }
-                            let mut output = Vec::with_capacity(192);
-                            project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
-                            items.push(output);
-                        }
-                        None => {
-                            return Ok(NextProjectedItemsBatchResult {
-                                items,
-                                next_pos: pos + jiter_abs_pos(&jiter, slice),
-                                finished: true,
-                            });
-                        }
-                    }
-                }
-                return Ok(NextProjectedItemsBatchResult {
-                    items,
-                    next_pos: pos + jiter_abs_pos(&jiter, slice),
-                    finished: false,
-                });
-            }
-        }
+        let Some(first_peek) = first else {
+            return Ok(NextProjectedItemsBatchResult {
+                items,
+                next_pos: pos + jiter.current_index(),
+                finished: true,
+            });
+        };
+        let (next_pos, finished) = fill_batch(
+            &mut jiter, slice, pos, spec, &mut items, batch_size, first_peek,
+        )?;
+        return Ok(NextProjectedItemsBatchResult {
+            items,
+            next_pos,
+            finished,
+        });
     }
 
     skip_ws(input, &mut pos);
@@ -224,14 +194,38 @@ pub fn project_next_array_items_batch(
     let slice = &input[pos..];
     let mut jiter = Jiter::new(slice);
     let peek = jiter.peek()?;
-    if peek != Peek::Object {
+    let (next_pos, finished) =
+        fill_batch(&mut jiter, slice, pos, spec, &mut items, batch_size, peek)?;
+    Ok(NextProjectedItemsBatchResult {
+        items,
+        next_pos,
+        finished,
+    })
+}
+
+/// Project one object item and continue filling `items` until `batch_size` or end-of-array.
+///
+/// `first_peek` is the peek already returned for the current item position.
+/// Returns `(next_pos, finished)` where `next_pos` is the absolute offset in the
+/// original input and `finished` indicates whether `]` was reached.
+fn fill_batch<'a>(
+    jiter: &mut Jiter<'a>,
+    slice: &'a [u8],
+    base_pos: usize,
+    spec: &ObjectSpec,
+    items: &mut Vec<Vec<u8>>,
+    batch_size: usize,
+    first_peek: Peek,
+) -> Result<(usize, bool), StreamError> {
+    if first_peek != Peek::Object {
         return Err(StreamError::new(format!(
-            "Expected array items to be JSON objects, got {peek:?}"
+            "Expected array items to be JSON objects, got {first_peek:?}"
         )));
     }
     let mut output = Vec::with_capacity(192);
-    project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
+    project_object_inner::<true, true>(jiter, slice, spec, &mut output)?;
     items.push(output);
+
     while items.len() < batch_size {
         match jiter.array_step()? {
             Some(next_peek) => {
@@ -241,23 +235,13 @@ pub fn project_next_array_items_batch(
                     )));
                 }
                 let mut output = Vec::with_capacity(192);
-                project_object_inner::<true, true>(&mut jiter, slice, spec, &mut output)?;
+                project_object_inner::<true, true>(jiter, slice, spec, &mut output)?;
                 items.push(output);
             }
-            None => {
-                return Ok(NextProjectedItemsBatchResult {
-                    items,
-                    next_pos: pos + jiter_abs_pos(&jiter, slice),
-                    finished: true,
-                });
-            }
+            None => return Ok((base_pos + jiter_abs_pos(jiter, slice), true)),
         }
     }
-    Ok(NextProjectedItemsBatchResult {
-        items,
-        next_pos: pos + jiter_abs_pos(&jiter, slice),
-        finished: false,
-    })
+    Ok((base_pos + jiter_abs_pos(jiter, slice), false))
 }
 
 /// Project the next item from a top-level JSON array.
@@ -356,12 +340,14 @@ where
     F: FnMut(Vec<u8>) -> Result<(), E>,
 {
     let mut jiter = Jiter::new(input);
-    let peek = jiter.peek().map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
+    let peek = jiter
+        .peek()
+        .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?;
 
     if peek != Peek::Array {
-        return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(format!(
-            "Expected a top-level JSON array, got {peek:?}"
-        ))));
+        return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+            format!("Expected a top-level JSON array, got {peek:?}"),
+        )));
     }
 
     let first = jiter
@@ -370,9 +356,9 @@ where
 
     if let Some(peek) = first {
         if peek != Peek::Object {
-            return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(format!(
-                "Expected array items to be JSON objects, got {peek:?}"
-            ))));
+            return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+                format!("Expected array items to be JSON objects, got {peek:?}"),
+            )));
         }
         let mut output = Vec::with_capacity(192);
         project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)
@@ -384,9 +370,9 @@ where
             .map_err(|e| VisitProjectedArrayItemsError::Stream(e.into()))?
         {
             if peek != Peek::Object {
-                return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(format!(
-                    "Expected array items to be JSON objects, got {peek:?}"
-                ))));
+                return Err(VisitProjectedArrayItemsError::Stream(StreamError::new(
+                    format!("Expected array items to be JSON objects, got {peek:?}"),
+                )));
             }
             let mut output = Vec::with_capacity(192);
             project_object_inner::<true, true>(&mut jiter, input, spec, &mut output)

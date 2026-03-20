@@ -169,25 +169,23 @@ pub fn next_array_item(
             )));
         }
         let first = jiter.known_array()?;
-        return match first {
-            None => Ok(NextArrayItemResult {
+        if first.is_none() {
+            return Ok(NextArrayItemResult {
                 span: None,
                 next_pos: pos + jiter.current_index(),
                 finished: true,
+            });
+        }
+        let start = pos + jiter.current_index();
+        jiter.next_skip()?;
+        return Ok(NextArrayItemResult {
+            span: Some(ByteSpan {
+                start,
+                end: pos + jiter.current_index(),
             }),
-            Some(_) => {
-                let start = pos + jiter.current_index();
-                jiter.next_skip()?;
-                Ok(NextArrayItemResult {
-                    span: Some(ByteSpan {
-                        start,
-                        end: pos + jiter.current_index(),
-                    }),
-                    next_pos: pos + jiter.current_index(),
-                    finished: false,
-                })
-            }
-        };
+            next_pos: pos + jiter.current_index(),
+            finished: false,
+        });
     }
 
     skip_ws(input, &mut pos);

@@ -1,7 +1,5 @@
 mod spec;
 
-use std::borrow::Cow;
-
 use pyo3::create_exception;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -13,6 +11,12 @@ use spec::{PyFieldSpec, PyObjectSpec};
 
 create_exception!(_native, StreamingProjectionError, PyRuntimeError);
 
+/// `(validated_items, first_validation_error_or_none)`
+type PyValidatedItems = (Vec<Py<PyAny>>, Option<Py<PyAny>>);
+
+/// `(validated_items, next_pos, array_finished, first_validation_error_or_none)`
+type PyBatchResult = (Vec<Py<PyAny>>, usize, bool, Option<Py<PyAny>>);
+
 // ---------------------------------------------------------------------------
 // Streaming functions (no projection / no spec required)
 // ---------------------------------------------------------------------------
@@ -23,10 +27,10 @@ create_exception!(_native, StreamingProjectionError, PyRuntimeError);
 #[pyo3(signature = (data, is_start=true))]
 fn extract_array_items(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     is_start: bool,
 ) -> PyResult<(Vec<Py<PyAny>>, usize, bool)> {
-    let result = pydantic_stream_core::streaming::extract_array_items(&data, is_start);
+    let result = pydantic_stream_core::streaming::extract_array_items(data, is_start);
     match result {
         Ok(r) => {
             let py_items: Vec<Py<PyAny>> = r
@@ -46,8 +50,8 @@ fn extract_array_items(
 
 /// Project a single JSON object, keeping only fields in the spec.
 #[pyfunction]
-fn project_object(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
-    let result = pydantic_stream_core::projection::project_object(&data, &spec.inner);
+fn project_object(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
+    let result = pydantic_stream_core::projection::project_object(data, &spec.inner);
     match result {
         Ok(bytes) => Ok(PyBytes::new(py, &bytes).into()),
         Err(e) => Err(StreamingProjectionError::new_err(e.message)),
@@ -56,8 +60,8 @@ fn project_object(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> P
 
 /// Project a JSON array of objects, keeping only fields in the spec.
 #[pyfunction]
-fn project_array(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
-    let result = pydantic_stream_core::projection::project_array(&data, &spec.inner);
+fn project_array(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Py<PyAny>> {
+    let result = pydantic_stream_core::projection::project_array(data, &spec.inner);
     match result {
         Ok(bytes) => Ok(PyBytes::new(py, &bytes).into()),
         Err(e) => Err(StreamingProjectionError::new_err(e.message)),
@@ -68,10 +72,10 @@ fn project_array(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> Py
 #[pyfunction]
 fn project_array_items(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
 ) -> PyResult<Vec<Py<PyAny>>> {
-    let result = pydantic_stream_core::projection::project_array_items(&data, &spec.inner);
+    let result = pydantic_stream_core::projection::project_array_items(data, &spec.inner);
     match result {
         Ok(items) => {
             let py_items: Vec<Py<PyAny>> = items
@@ -91,13 +95,13 @@ fn project_array_items(
 #[pyo3(signature = (data, spec, validator, list_validator, batch_size=16))]
 fn validate_array_items_batched(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
     list_validator: &Bound<'_, PyAny>,
     batch_size: usize,
-) -> PyResult<(Vec<Py<PyAny>>, Option<Py<PyAny>>)> {
-    let result = pydantic_stream_core::projection::project_array_items(&data, &spec.inner);
+) -> PyResult<PyValidatedItems> {
+    let result = pydantic_stream_core::projection::project_array_items(data, &spec.inner);
     match result {
         Ok(items) => {
             let mut validated = Vec::with_capacity(items.len());
@@ -124,7 +128,9 @@ fn validate_array_items_batched(
                         for item in batch {
                             match validator.call1((PyBytes::new(py, item),)) {
                                 Ok(obj) => validated.push(obj.unbind()),
-                                Err(err) => return Ok((validated, Some(err.into_value(py).into()))),
+                                Err(err) => {
+                                    return Ok((validated, Some(err.into_value(py).into())));
+                                }
                             }
                         }
                     }
@@ -144,22 +150,21 @@ fn validate_array_items_batched(
 #[pyfunction]
 fn validate_array_items(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
-) -> PyResult<(Vec<Py<PyAny>>, Option<Py<PyAny>>)> {
+) -> PyResult<PyValidatedItems> {
     let mut validated = Vec::new();
-    let result = pydantic_stream_core::projection::visit_projected_array_items(
-        &data,
-        &spec.inner,
-        |item| match validator.call1((PyBytes::new(py, &item),)) {
-            Ok(obj) => {
-                validated.push(obj.unbind());
-                Ok(())
+    let result =
+        pydantic_stream_core::projection::visit_projected_array_items(data, &spec.inner, |item| {
+            match validator.call1((PyBytes::new(py, &item),)) {
+                Ok(obj) => {
+                    validated.push(obj.unbind());
+                    Ok(())
+                }
+                Err(err) => Err(err),
             }
-            Err(err) => Err(err),
-        },
-    );
+        });
 
     match result {
         Ok(()) => Ok((validated, None)),
@@ -177,13 +182,14 @@ fn validate_array_items(
 #[pyo3(signature = (data, spec, validator, pos=0, started=false))]
 fn validate_array_item_next(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
     pos: usize,
     started: bool,
 ) -> PyResult<(Option<Py<PyAny>>, usize, bool)> {
-    match pydantic_stream_core::projection::project_next_array_item(&data, &spec.inner, pos, started) {
+    match pydantic_stream_core::projection::project_next_array_item(data, &spec.inner, pos, started)
+    {
         Ok(result) => match result.item {
             Some(bytes) => {
                 let obj = validator.call1((PyBytes::new(py, &bytes),))?;
@@ -200,15 +206,15 @@ fn validate_array_item_next(
 #[pyo3(signature = (data, spec, validator, pos=0, started=false, batch_size=8))]
 fn validate_array_items_next_batch(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
     pos: usize,
     started: bool,
     batch_size: usize,
-) -> PyResult<(Vec<Py<PyAny>>, usize, bool, Option<Py<PyAny>>)> {
+) -> PyResult<PyBatchResult> {
     match pydantic_stream_core::projection::project_next_array_items_batch(
-        &data,
+        data,
         &spec.inner,
         pos,
         started,
@@ -225,7 +231,7 @@ fn validate_array_items_next_batch(
                             result.next_pos,
                             result.finished,
                             Some(err.into_value(py).into()),
-                        ))
+                        ));
                     }
                 }
             }
@@ -240,12 +246,12 @@ fn validate_array_items_next_batch(
 #[pyo3(signature = (data, validator, pos=0, started=false))]
 fn validate_raw_array_item_next(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     validator: &Bound<'_, PyAny>,
     pos: usize,
     started: bool,
 ) -> PyResult<(Option<Py<PyAny>>, usize, bool)> {
-    match pydantic_stream_core::streaming::next_array_item(&data, pos, started) {
+    match pydantic_stream_core::streaming::next_array_item(data, pos, started) {
         Ok(result) => match result.span {
             Some(span) => {
                 let obj = validator.call1((PyBytes::new(py, &data[span.start..span.end]),))?;
@@ -261,11 +267,11 @@ fn validate_raw_array_item_next(
 #[pyfunction]
 fn validate_raw_array_items(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     validator: &Bound<'_, PyAny>,
-) -> PyResult<(Vec<Py<PyAny>>, Option<Py<PyAny>>)> {
+) -> PyResult<PyValidatedItems> {
     let mut validated = Vec::new();
-    let result = pydantic_stream_core::streaming::visit_array_items(&data, true, |span| {
+    let result = pydantic_stream_core::streaming::visit_array_items(data, true, |span| {
         match validator.call1((PyBytes::new(py, &data[span.start..span.end]),)) {
             Ok(obj) => {
                 validated.push(obj.unbind());
@@ -288,8 +294,8 @@ fn validate_raw_array_items(
 
 /// Project JSONL input, returning a list of projected JSON byte strings.
 #[pyfunction]
-fn project_jsonl(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> PyResult<Vec<Py<PyAny>>> {
-    let result = pydantic_stream_core::projection::project_jsonl(&data, &spec.inner);
+fn project_jsonl(py: Python<'_>, data: &[u8], spec: &PyObjectSpec) -> PyResult<Vec<Py<PyAny>>> {
+    let result = pydantic_stream_core::projection::project_jsonl(data, &spec.inner);
     match result {
         Ok(lines) => {
             let py_lines: Vec<Py<PyAny>> = lines
@@ -308,7 +314,7 @@ fn project_jsonl(py: Python<'_>, data: Cow<'_, [u8]>, spec: &PyObjectSpec) -> Py
 #[allow(clippy::similar_names)]
 fn project_array_items_sliced(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     prefix: Option<&str>,
     start: usize,
@@ -321,7 +327,7 @@ fn project_array_items_sliced(
     };
 
     let result = pydantic_stream_core::projection::project_array_items_sliced(
-        &data,
+        data,
         &spec.inner,
         &segments,
         start,
@@ -346,7 +352,7 @@ fn project_array_items_sliced(
 #[pyo3(signature = (data, spec, prefix=None, index=0))]
 fn project_array_item_at(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     prefix: Option<&str>,
     index: usize,
@@ -356,7 +362,12 @@ fn project_array_item_at(
         _ => Vec::new(),
     };
 
-    let result = pydantic_stream_core::projection::project_array_item_at(&data, &spec.inner, &segments, index);
+    let result = pydantic_stream_core::projection::project_array_item_at(
+        data,
+        &spec.inner,
+        &segments,
+        index,
+    );
 
     match result {
         Ok(Some(bytes)) => Ok(Some(PyBytes::new(py, &bytes).into())),
@@ -370,7 +381,7 @@ fn project_array_item_at(
 #[pyo3(signature = (data, spec, prefix=None))]
 fn project_array_nav(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     prefix: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
@@ -379,7 +390,7 @@ fn project_array_nav(
         _ => Vec::new(),
     };
 
-    let result = pydantic_stream_core::projection::project_array_nav(&data, &spec.inner, &segments);
+    let result = pydantic_stream_core::projection::project_array_nav(data, &spec.inner, &segments);
 
     match result {
         Ok(bytes) => Ok(PyBytes::new(py, &bytes).into()),
@@ -392,7 +403,7 @@ fn project_array_nav(
 #[pyo3(signature = (data, spec, validator, prefix=None))]
 fn validate_array_nav(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
     prefix: Option<&str>,
@@ -402,10 +413,12 @@ fn validate_array_nav(
         _ => Vec::new(),
     };
 
-    let result = pydantic_stream_core::projection::project_array_nav(&data, &spec.inner, &segments);
+    let result = pydantic_stream_core::projection::project_array_nav(data, &spec.inner, &segments);
 
     match result {
-        Ok(bytes) => validator.call1((PyBytes::new(py, &bytes),)).map(Bound::unbind),
+        Ok(bytes) => validator
+            .call1((PyBytes::new(py, &bytes),))
+            .map(Bound::unbind),
         Err(e) => Err(StreamingProjectionError::new_err(e.message)),
     }
 }
@@ -415,13 +428,13 @@ fn validate_array_nav(
 #[pyo3(signature = (data, spec, validator, is_start=true))]
 fn validate_array_items_partial(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     validator: &Bound<'_, PyAny>,
     is_start: bool,
-) -> PyResult<(Vec<Py<PyAny>>, usize, bool, Option<Py<PyAny>>)> {
+) -> PyResult<PyBatchResult> {
     let result =
-        pydantic_stream_core::projection::project_array_items_partial(&data, &spec.inner, is_start);
+        pydantic_stream_core::projection::project_array_items_partial(data, &spec.inner, is_start);
     match result {
         Ok(r) => {
             let mut validated = Vec::with_capacity(r.items.len());
@@ -429,7 +442,12 @@ fn validate_array_items_partial(
                 match validator.call1((PyBytes::new(py, &item),)) {
                     Ok(obj) => validated.push(obj.unbind()),
                     Err(err) => {
-                        return Ok((validated, r.consumed, r.finished, Some(err.into_value(py).into())));
+                        return Ok((
+                            validated,
+                            r.consumed,
+                            r.finished,
+                            Some(err.into_value(py).into()),
+                        ));
                     }
                 }
             }
@@ -444,12 +462,12 @@ fn validate_array_items_partial(
 #[pyo3(signature = (data, spec, is_start=true))]
 fn project_array_items_partial(
     py: Python<'_>,
-    data: Cow<'_, [u8]>,
+    data: &[u8],
     spec: &PyObjectSpec,
     is_start: bool,
 ) -> PyResult<(Vec<Py<PyAny>>, usize, bool)> {
     let result =
-        pydantic_stream_core::projection::project_array_items_partial(&data, &spec.inner, is_start);
+        pydantic_stream_core::projection::project_array_items_partial(data, &spec.inner, is_start);
     match result {
         Ok(r) => {
             let py_items: Vec<Py<PyAny>> = r

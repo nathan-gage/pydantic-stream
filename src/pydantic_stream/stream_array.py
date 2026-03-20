@@ -12,7 +12,6 @@ from ._native import (
     project_array_item_at,
     project_array_items_sliced,
     project_array_nav,
-    validate_array_item_next,
     validate_array_items,
     validate_array_items_next_batch,
     validate_array_nav,
@@ -34,18 +33,6 @@ _PROJECTED_ITER_BATCH_SIZE = 16
 def _iter_items_then_raise(items: list[T], error: BaseException) -> Iterator[T]:
     yield from items
     raise error
-
-
-def _iter_validated_array_items(data: Any, spec: ObjectSpec, validator: Any) -> Iterator[T]:
-    pos = 0
-    started = False
-    while True:
-        item, pos, finished = validate_array_item_next(data, spec, validator, pos, started)
-        if finished:
-            return
-        started = True
-        if item is not None:
-            yield item
 
 
 def _iter_validated_array_item_batches(data: Any, spec: ObjectSpec, validator: Any) -> Iterator[T]:
@@ -124,22 +111,22 @@ class StreamArray(Generic[T]):
         # path and only fall back to per-item validation on errors to preserve
         # error locations and "yield valid items until the first error"
         # semantics.
-        validate = self._adapter.validate_json
         fast_validate = self._adapter.validator.validate_json
+        data_len = len(self._data)
         if (
             self._prefix is None
             and self._allow_raw_small_iter
-            and len(self._data) <= _RAW_ITEMWISE_BYTES_THRESHOLD
+            and data_len <= _RAW_ITEMWISE_BYTES_THRESHOLD
         ):
-            if len(self._data) <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
+            if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
                 items, error = validate_raw_array_items(self._data, fast_validate)
                 return iter(items) if error is None else _iter_items_then_raise(items, error)
             return _iter_validated_raw_array_items(self._data, fast_validate)
 
         if self._prefix is None and (
-            self._prefer_itemwise_iter or len(self._data) <= _ITER_ITEMWISE_BYTES_THRESHOLD
+            self._prefer_itemwise_iter or data_len <= _ITER_ITEMWISE_BYTES_THRESHOLD
         ):
-            if len(self._data) <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
+            if data_len <= _EAGER_VALIDATED_ITEMS_BYTES_THRESHOLD:
                 items, error = validate_array_items(self._data, self._spec, fast_validate)
                 return iter(items) if error is None else _iter_items_then_raise(items, error)
             return _iter_validated_array_item_batches(self._data, self._spec, fast_validate)
@@ -149,6 +136,7 @@ class StreamArray(Generic[T]):
             return iter(self._list_adapter.validate_json(blob))
         except ValidationError:
             items, _, _ = extract_array_items(blob, is_start=True)
+            validate = self._adapter.validate_json
             return (validate(item_bytes) for item_bytes in items)
 
     @overload
